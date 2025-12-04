@@ -60,6 +60,23 @@ go run . down
 
 ---
 
+### 바이너리(릴리즈)로 사용하기
+
+이 프로젝트는 Go 소스 코드를 직접 실행하는 것 외에, **GitHub Releases에 올려진 빌드된 실행 파일(바이너리)** 로도 사용할 수 있습니다.
+
+-   **1단계**: 레포지토리의 **Releases 페이지**에서 본인 OS에 맞는 바이너리 파일을 다운로드합니다.
+-   **2단계**: 실행 권한 부여 (macOS / Linux)
+
+    ```bash
+    chmod +x gcp-free-deploy
+    ```
+
+-   **3단계**: 위의 사용법과 동일하게 실행
+    -   macOS / Linux: `./gcp-free-deploy up`
+    -   Windows: `gcp-free-deploy.exe up`
+
+---
+
 ### 주요 파일 설명
 
 -   **`main.go`**
