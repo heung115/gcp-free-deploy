@@ -9,7 +9,7 @@ permissions:
     contents: write
 
 jobs:
-    build-and-release:
+    build:
         runs-on: ubuntu-latest
         strategy:
             matrix:
@@ -35,9 +35,25 @@ jobs:
                   GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
                     go build -o dist/gcp-free-deploy-${{ matrix.goos }}-${{ matrix.goarch }} .
 
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: gcp-free-deploy-${{ matrix.goos }}-${{ matrix.goarch }}
+                  path: dist/*
+
+    release:
+        needs: build
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Download all artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  path: dist
+
             - name: Create GitHub Release
               uses: softprops/action-gh-release@v2
               with:
-                  files: dist/*
+                  files: dist/**
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
