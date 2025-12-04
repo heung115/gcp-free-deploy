@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+
+# Go build
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go module cache (보통은 커밋 X)
+vendor/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.*
+crash.log
+crash.*.log
+
+# Terraform 변수 파일 (민감 정보 가능)
+terraform.tfvars
+*.tfvars.json
+
+# GCP 인증 키
+credentials.json
+
+# 기타 로그
+*.log
