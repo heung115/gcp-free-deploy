@@ -8,6 +8,7 @@
 
 # Go build
 bin/
+/gcp-free-deploy
 *.exe
 *.exe~
 *.dll
@@ -21,18 +22,35 @@ vendor/
 
 # Terraform
 .terraform/
-.terraform.lock.hcl
 terraform.tfstate
 terraform.tfstate.*
 crash.log
 crash.*.log
+.gcp-free-deploy.tfplan
+.gcp-free-deploy-destroy.tfplan
+*.tfplan
 
 # Terraform 변수 파일 (민감 정보 가능)
 terraform.tfvars
+*.tfvars
 *.tfvars.json
+.gcp-free-deploy.tfvars.json
+
+# 로컬 배포 설정 파일 (개인/환경별 값)
+gcp-free-deploy.json
 
 # GCP 인증 키
 credentials.json
+service-account*.json
+*-credentials.json
+
+# 환경·인증서·터널 credential
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.cloudflared/
 
 # 기타 로그
 *.log

@@ -1,0 +1,16 @@
+{
+  "project_id": "your-project-id",
+  "zone": "us-central1-a",
+  "fallback_zones": [
+    "us-central1-b",
+    "us-central1-c"
+  ],
+  "source": "docker",
+  "docker_image": "nginx:1.27.4",
+  "container_port": 80,
+  "allowed_source_ranges": [
+    "203.0.113.10/32"
+  ],
+  "machine_type": "e2-micro",
+  "disk_size_gb": 10
+}

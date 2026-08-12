@@ -1,167 +1,163 @@
-// monitor.go
 package main
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
+	"io"
 	"strings"
 	"time"
 )
 
-// 테라폼 Output 구조체
-type TfOutput struct {
-	VmName struct {
-		Value string `json:"value"`
-	} `json:"vm_name"`
-	VmZone struct {
-		Value string `json:"value"`
-	} `json:"vm_zone"`
-	WebsiteURL struct {
-		Value string `json:"value"`
-	} `json:"website_url"`
+type TerraformValue[T any] struct {
+	Sensitive bool `json:"sensitive"`
+	Value     T    `json:"value"`
 }
 
-type logMonitor struct {
-	w           *os.File
-	cmd         *exec.Cmd
-	done        chan struct{}
-	onFirstByte func()
-	triggered   bool
-	targetLog   string
+type TerraformOutputs struct {
+	ProjectID          TerraformValue[string]   `json:"project_id"`
+	Region             TerraformValue[string]   `json:"region"`
+	VMName             TerraformValue[string]   `json:"vm_name"`
+	VMZone             TerraformValue[string]   `json:"vm_zone"`
+	WebsiteURL         TerraformValue[string]   `json:"website_url"`
+	GeneratedResources TerraformValue[[]string] `json:"generated_resources"`
 }
 
-func (l *logMonitor) Write(p []byte) (n int, err error) {
-	if !l.triggered && len(p) > 0 {
-		l.triggered = true
-		l.onFirstByte()
+func parseTerraformOutputs(data []byte) (TerraformOutputs, error) {
+	var outputs TerraformOutputs
+	if err := json.Unmarshal(data, &outputs); err != nil {
+		return TerraformOutputs{}, &DeploymentError{Kind: FailureTerraformOutput, Operation: "terraform output", Diagnostics: "JSON 출력 형식이 올바르지 않습니다"}
 	}
-	logContent := string(p)
-	if strings.Contains(logContent, l.targetLog) {
-
-		n, err = l.w.Write(p)
-
-		fmt.Println("설치 완료!")
-
-		select {
-		case <-l.done:
-		default:
-			close(l.done)
-
-			return n, err
-		}
+	if outputs.ProjectID.Value == "" || outputs.Region.Value == "" || outputs.VMName.Value == "" || outputs.VMZone.Value == "" || outputs.WebsiteURL.Value == "" {
+		return TerraformOutputs{}, &DeploymentError{Kind: FailureTerraformOutput, Operation: "terraform output", Diagnostics: "필수 output이 비어 있습니다"}
 	}
-	return l.w.Write(p)
+	return outputs, nil
 }
 
-// 지능형 모니터링 함수
-func monitorInstallation(projectID string) {
-	done := make(chan struct{})
-	cmdDone := make(chan error)
-
-	// 1. 테라폼 정보 가져오기
-	cmd := exec.Command("terraform", "output", "-json")
-	output, err := cmd.Output()
-	if err != nil {
-		fmt.Println("⚠️  정보 가져오기 실패.")
-		return
+func readTerraformOutputs(ctx context.Context, runner Runner, dir string) (TerraformOutputs, error) {
+	result := runner.Run(ctx, Command{Name: "terraform", Args: []string{"output", "-json", "-no-color"}, Dir: dir})
+	if result.ExitCode != 0 {
+		return TerraformOutputs{}, &DeploymentError{Kind: FailureTerraformOutput, Operation: "terraform output", Diagnostics: sanitizeDiagnostics(result.Stdout + "\n" + result.Stderr)}
 	}
+	return parseTerraformOutputs([]byte(result.Stdout))
+}
 
-	var tfOut TfOutput
-	if err := json.Unmarshal(output, &tfOut); err != nil {
-		fmt.Println("⚠️  정보 파싱 실패.")
-		return
+type DeploymentMonitor struct {
+	runner       Runner
+	out          io.Writer
+	attempts     int
+	retryDelay   time.Duration
+	healthChecks int
+}
+
+func NewDeploymentMonitor(runner Runner, out io.Writer) *DeploymentMonitor {
+	return &DeploymentMonitor{runner: runner, out: out, attempts: 30, retryDelay: 4 * time.Second, healthChecks: 12}
+}
+
+func (m *DeploymentMonitor) Wait(ctx context.Context, outputs TerraformOutputs) error {
+	for attempt := 1; attempt <= m.attempts; attempt++ {
+		result := m.runRemote(ctx, outputs, statusCommand())
+		combined := result.Stdout + "\n" + result.Stderr
+		if result.ExitCode == 0 {
+			if strings.Contains(combined, "STARTUP_DONE") && strings.Contains(combined, "CONTAINER_RUNNING") && strings.Contains(combined, "HTTP_HEALTH_OK") {
+				return m.waitForPublicHealth(ctx, outputs.WebsiteURL.Value)
+			}
+			if failure := classifyRuntimeFailure(combined); failure != "" {
+				return &DeploymentError{Kind: failure, Operation: "VM startup 검증", Diagnostics: m.collectDiagnostics(ctx, outputs)}
+			}
+		} else if attempt == m.attempts {
+			return &DeploymentError{Kind: FailureSSH, Operation: "IAP SSH 연결", Diagnostics: m.collectDiagnostics(ctx, outputs)}
+		}
+
+		fmt.Fprintf(m.out, "startup 상태 대기 중 (%d/%d)\n", attempt, m.attempts)
+		if err := waitContext(ctx, m.retryDelay); err != nil {
+			return err
+		}
 	}
+	return &DeploymentError{Kind: FailureVMStartup, Operation: "VM startup 검증"}
+}
 
-	vmName := tfOut.VmName.Value
-	vmZone := tfOut.VmZone.Value
+func (m *DeploymentMonitor) runRemote(ctx context.Context, outputs TerraformOutputs, remoteCommand string) CommandResult {
+	return m.runner.Run(ctx, Command{
+		Name: "gcloud",
+		Args: []string{
+			"compute", "ssh", outputs.VMName.Value,
+			"--project", outputs.ProjectID.Value,
+			"--zone", outputs.VMZone.Value,
+			"--tunnel-through-iap", "--quiet",
+			"--command", remoteCommand,
+			"--", "-o", "ConnectTimeout=10",
+		},
+	})
+}
 
-	// 2. 스피너 설정
-	stopSpinner := make(chan bool)
-	updateStatus := make(chan string)
-	spinnerStopped := false
+func statusCommand() string {
+	return "sudo journalctl -t gcp-free-deploy -n 80 --no-pager; " +
+		"if sudo docker inspect --format='CONTAINER_{{if .State.Running}}RUNNING{{else}}STOPPED{{end}}' web 2>/dev/null; then true; else echo CONTAINER_MISSING; fi; " +
+		"if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:80/ >/dev/null; then echo HTTP_HEALTH_OK; else echo HTTP_HEALTH_FAILED; fi"
+}
 
-	go func() {
-		chars := `-\|/`
-		i := 0
-		currentMsg := "접속 준비 중..."
+func diagnosticsCommand() string {
+	return "echo '[startup service]'; sudo systemctl status google-startup-scripts.service --no-pager --lines=40 || true; " +
+		"echo '[startup log]'; sudo journalctl -t gcp-free-deploy -n 160 --no-pager || true; " +
+		"echo '[containers]'; sudo docker ps -a --no-trunc || true; " +
+		"echo '[container log]'; sudo docker logs --tail 120 web 2>&1 || true; " +
+		"echo '[health]'; curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:80/ >/dev/null && echo HTTP_HEALTH_OK || echo HTTP_HEALTH_FAILED"
+}
 
-		for {
-			select {
-			case <-stopSpinner:
-				return
-			case msg := <-updateStatus:
-				currentMsg = msg
-			default:
-				fmt.Printf("\r%-70s %c", "⏳ "+currentMsg, chars[i%4])
-				i++
-				time.Sleep(100 * time.Millisecond)
+func (m *DeploymentMonitor) collectDiagnostics(ctx context.Context, outputs TerraformOutputs) string {
+	result := m.runRemote(ctx, outputs, diagnosticsCommand())
+	if result.ExitCode != 0 && strings.TrimSpace(result.Stdout) == "" {
+		return sanitizeDiagnostics(result.Stderr)
+	}
+	return sanitizeDiagnostics(result.Stdout + "\n" + result.Stderr)
+}
+
+func (m *DeploymentMonitor) waitForPublicHealth(ctx context.Context, websiteURL string) error {
+	for attempt := 1; attempt <= m.healthChecks; attempt++ {
+		result := m.runner.Run(ctx, Command{Name: "curl", Args: []string{"--fail", "--silent", "--show-error", "--connect-timeout", "3", "--max-time", "10", websiteURL}})
+		if result.ExitCode == 0 {
+			return nil
+		}
+		if attempt < m.healthChecks {
+			if err := waitContext(ctx, m.retryDelay); err != nil {
+				return err
 			}
 		}
-	}()
-
-	cleanStopSpinner := func() {
-		if !spinnerStopped {
-			spinnerStopped = true
-			stopSpinner <- true
-			fmt.Printf("\r%s\r", strings.Repeat(" ", 80))
-			fmt.Println("📺 연결 성공! 실시간 로그를 출력합니다 (종료: Ctrl+C)")
-			fmt.Println("-------------------------------------------------------")
-		}
 	}
+	return &DeploymentError{Kind: FailureHealthCheck, Operation: "외부 HTTP health check", Diagnostics: "VM 내부 검증은 통과했지만 외부 HTTP 요청이 실패했습니다"}
+}
 
-	// 3. 접속 재시도 루프
-	maxRetries := 30
-
-	for i := 0; i < maxRetries; i++ {
-		sshCmd := exec.Command("gcloud", "compute", "ssh", vmName,
-			"--project", projectID,
-			"--zone", vmZone,
-			"--command", "sudo journalctl -u google-startup-scripts.service -f -n 20",
-			"--quiet",
-			"--", "-o", "ConnectTimeout=5",
-		)
-
-		var stderrBuf bytes.Buffer
-		sshCmd.Stderr = &stderrBuf
-
-		sshCmd.Stdout = &logMonitor{
-			w:           os.Stdout,
-			cmd:         sshCmd,
-			done:        done,
-			onFirstByte: cleanStopSpinner,
-			targetLog:   "Finished Google Compute Engine Startup Scripts",
-		}
-		go func() {
-			cmdDone <- sshCmd.Run()
-
-		}()
-
-		select {
-		case <-done:
-			fmt.Println("배포가 완료되었습니다. 모니터링을 종료합니다!")
-			fmt.Println("웹사이트 URL: ", tfOut.WebsiteURL.Value)
-			return
-		case err := <-cmdDone:
-			if err == nil {
-				return
-			}
-
-			errorMsg := stderrBuf.String()
-			if strings.Contains(errorMsg, "Connection refused") {
-				updateStatus <- fmt.Sprintf("VM이 켜지는 중입니다... (부팅 단계 %d/%d)", i+1, maxRetries)
-			} else if strings.Contains(errorMsg, "timed out") {
-				updateStatus <- "네트워크 응답 대기 중..."
-			} else {
-				updateStatus <- fmt.Sprintf("접속 재시도 중... (%d/%d)", i+1, maxRetries)
-			}
-		}
-
-		time.Sleep(4 * time.Second)
+func classifyRuntimeFailure(raw string) FailureKind {
+	switch {
+	case strings.Contains(raw, "FAILURE_DOCKER_PULL"):
+		return FailureDockerPull
+	case strings.Contains(raw, "FAILURE_DOCKER_BUILD"):
+		return FailureDockerBuild
+	case strings.Contains(raw, "FAILURE_DOCKER_RUN"):
+		return FailureDockerRun
+	case strings.Contains(raw, "CONTAINER_NOT_RUNNING"), strings.Contains(raw, "CONTAINER_STOPPED"):
+		return FailureContainerStopped
+	case strings.Contains(raw, "FAILURE_HTTP_HEALTH"):
+		return FailureHealthCheck
+	case strings.Contains(raw, "STARTUP_DONE") && strings.Contains(raw, "CONTAINER_MISSING"):
+		return FailureContainerStopped
+	case strings.Contains(raw, "STARTUP_DONE") && strings.Contains(raw, "HTTP_HEALTH_FAILED"):
+		return FailureHealthCheck
+	case strings.Contains(raw, "STARTUP_FAILED"):
+		return FailureVMStartup
+	default:
+		return ""
 	}
+}
 
-	cleanStopSpinner()
-	fmt.Println("\n❌ 최종 접속 실패.")
+func waitContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
