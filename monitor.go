@@ -3,10 +3,18 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"time"
+)
+
+const (
+	defaultStartupTimeout = 15 * time.Minute
+	minStartupTimeout     = 1 * time.Minute
+	maxStartupTimeout     = 1 * time.Hour
+	diagnosticTimeout     = 45 * time.Second
 )
 
 type TerraformValue[T any] struct {
@@ -43,38 +51,93 @@ func readTerraformOutputs(ctx context.Context, runner Runner, dir string) (Terra
 }
 
 type DeploymentMonitor struct {
-	runner       Runner
-	out          io.Writer
-	attempts     int
-	retryDelay   time.Duration
-	healthChecks int
+	runner         Runner
+	out            io.Writer
+	startupTimeout time.Duration
+	pollInterval   time.Duration
+	healthChecks   int
 }
 
 func NewDeploymentMonitor(runner Runner, out io.Writer) *DeploymentMonitor {
-	return &DeploymentMonitor{runner: runner, out: out, attempts: 30, retryDelay: 4 * time.Second, healthChecks: 12}
+	return &DeploymentMonitor{
+		runner:         runner,
+		out:            out,
+		startupTimeout: defaultStartupTimeout,
+		pollInterval:   4 * time.Second,
+		healthChecks:   12,
+	}
 }
 
 func (m *DeploymentMonitor) Wait(ctx context.Context, outputs TerraformOutputs) error {
-	for attempt := 1; attempt <= m.attempts; attempt++ {
-		result := m.runRemote(ctx, outputs, statusCommand())
+	monitorCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)
+	defer cancel()
+
+	startedAt := time.Now()
+	sshConnected := false
+	for poll := 1; ; poll++ {
+		result := m.runRemote(monitorCtx, outputs, statusCommand())
 		combined := result.Stdout + "\n" + result.Stderr
 		if result.ExitCode == 0 {
-			if strings.Contains(combined, "STARTUP_DONE") && strings.Contains(combined, "CONTAINER_RUNNING") && strings.Contains(combined, "HTTP_HEALTH_OK") {
+			sshConnected = true
+			if runtimeReady(combined) {
 				return m.waitForPublicHealth(ctx, outputs.WebsiteURL.Value)
 			}
 			if failure := classifyRuntimeFailure(combined); failure != "" {
-				return &DeploymentError{Kind: failure, Operation: "VM startup 검증", Diagnostics: m.collectDiagnostics(ctx, outputs)}
+				return &DeploymentError{Kind: failure, Operation: "VM startup 검증", Diagnostics: m.collectDiagnosticsWithTimeout(ctx, outputs)}
 			}
-		} else if attempt == m.attempts {
-			return &DeploymentError{Kind: FailureSSH, Operation: "IAP SSH 연결", Diagnostics: m.collectDiagnostics(ctx, outputs)}
 		}
 
-		fmt.Fprintf(m.out, "startup 상태 대기 중 (%d/%d)\n", attempt, m.attempts)
-		if err := waitContext(ctx, m.retryDelay); err != nil {
+		if monitorCtx.Err() != nil {
+			break
+		}
+		elapsed := time.Since(startedAt).Round(time.Second)
+		fmt.Fprintf(m.out, "startup 상태 대기 중 (확인 %d회, 경과 %s / 제한 %s)\n", poll, elapsed, m.startupTimeout)
+		if err := waitContext(monitorCtx, m.pollInterval); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				break
+			}
 			return err
 		}
 	}
-	return &DeploymentError{Kind: FailureVMStartup, Operation: "VM startup 검증"}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// 제한 시각과 startup 완료가 거의 동시에 발생할 수 있으므로 별도 짧은
+	// context에서 상태를 마지막으로 한 번 확인한 뒤 실패로 판정한다.
+	finalCtx, finalCancel := context.WithTimeout(ctx, diagnosticTimeout)
+	finalResult := m.runRemote(finalCtx, outputs, statusCommand())
+	finalCancel()
+	finalCombined := finalResult.Stdout + "\n" + finalResult.Stderr
+	if finalResult.ExitCode == 0 {
+		sshConnected = true
+		if runtimeReady(finalCombined) {
+			return m.waitForPublicHealth(ctx, outputs.WebsiteURL.Value)
+		}
+		if failure := classifyRuntimeFailure(finalCombined); failure != "" {
+			return &DeploymentError{Kind: failure, Operation: "VM startup 검증", Diagnostics: m.collectDiagnosticsWithTimeout(ctx, outputs)}
+		}
+	}
+
+	kind := FailureVMStartup
+	operation := "VM startup 검증"
+	if !sshConnected {
+		kind = FailureSSH
+		operation = "IAP SSH 연결"
+	}
+	diagnostics := m.collectDiagnosticsWithTimeout(ctx, outputs)
+	timeoutMessage := fmt.Sprintf("startup 제한 %s를 초과했습니다", m.startupTimeout)
+	if diagnostics != "" {
+		timeoutMessage += "\n" + diagnostics
+	}
+	return &DeploymentError{Kind: kind, Operation: operation, Diagnostics: timeoutMessage}
+}
+
+func runtimeReady(raw string) bool {
+	return strings.Contains(raw, "STARTUP_DONE") &&
+		strings.Contains(raw, "CONTAINER_RUNNING") &&
+		strings.Contains(raw, "HTTP_HEALTH_OK")
 }
 
 func (m *DeploymentMonitor) runRemote(ctx context.Context, outputs TerraformOutputs, remoteCommand string) CommandResult {
@@ -113,6 +176,12 @@ func (m *DeploymentMonitor) collectDiagnostics(ctx context.Context, outputs Terr
 	return sanitizeDiagnostics(result.Stdout + "\n" + result.Stderr)
 }
 
+func (m *DeploymentMonitor) collectDiagnosticsWithTimeout(ctx context.Context, outputs TerraformOutputs) string {
+	diagnosticCtx, cancel := context.WithTimeout(ctx, diagnosticTimeout)
+	defer cancel()
+	return m.collectDiagnostics(diagnosticCtx, outputs)
+}
+
 func (m *DeploymentMonitor) waitForPublicHealth(ctx context.Context, websiteURL string) error {
 	for attempt := 1; attempt <= m.healthChecks; attempt++ {
 		result := m.runner.Run(ctx, Command{Name: "curl", Args: []string{"--fail", "--silent", "--show-error", "--connect-timeout", "3", "--max-time", "10", websiteURL}})
@@ -120,7 +189,7 @@ func (m *DeploymentMonitor) waitForPublicHealth(ctx context.Context, websiteURL 
 			return nil
 		}
 		if attempt < m.healthChecks {
-			if err := waitContext(ctx, m.retryDelay); err != nil {
+			if err := waitContext(ctx, m.pollInterval); err != nil {
 				return err
 			}
 		}

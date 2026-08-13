@@ -124,6 +124,14 @@ go run . up
 
 Terraform plan을 확인한 뒤 `yes`를 입력하면 적용됩니다.
 
+startup 검증은 성공할 때까지 무조건 15분을 기다리지 않습니다. IAP로 상태를 주기적으로 확인해 container와 내부 HTTP가 준비되면 즉시 다음 단계로 넘어갑니다. 기본 15분은 APT mirror·Docker registry·VM 성능 차이로 무한 대기하거나 비용이 계속 발생하지 않게 하는 최대 상한이며, 1분~1시간 범위에서 조정할 수 있습니다.
+
+```bash
+go run . up --startup-timeout 20m
+```
+
+상한을 넘기면 제한 시각에 상태를 마지막으로 다시 확인하고 startup service·tagged log·container·내부 HTTP 진단을 수집합니다.
+
 전체 인터넷에 HTTP를 공개하려면 설정에 `0.0.0.0/0`을 지정하고 위험을 명시적으로 허용해야 합니다.
 
 ```bash

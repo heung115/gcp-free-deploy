@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,8 +44,7 @@ func TestMonitorClassifiesStartupFailureAndCollectsDiagnostics(t *testing.T) {
 		{Stdout: "FAILURE_DOCKER_BUILD\ncontainer log"},
 	}}
 	monitor := NewDeploymentMonitor(runner, &bytes.Buffer{})
-	monitor.attempts = 1
-	monitor.retryDelay = 0
+	monitor.pollInterval = 0
 
 	err := monitor.Wait(context.Background(), testTerraformOutputs())
 	var deployErr *DeploymentError
@@ -62,9 +62,8 @@ func TestMonitorReportsExternalHealthFailure(t *testing.T) {
 		{ExitCode: 22, Stderr: "HTTP 503"},
 	}}
 	monitor := NewDeploymentMonitor(runner, &bytes.Buffer{})
-	monitor.attempts = 1
 	monitor.healthChecks = 1
-	monitor.retryDelay = time.Nanosecond
+	monitor.pollInterval = time.Nanosecond
 
 	err := monitor.Wait(context.Background(), testTerraformOutputs())
 	var deployErr *DeploymentError
@@ -80,9 +79,8 @@ func TestMonitorWaitsWhileContainerIsNotCreatedYet(t *testing.T) {
 		{},
 	}}
 	monitor := NewDeploymentMonitor(runner, &bytes.Buffer{})
-	monitor.attempts = 2
 	monitor.healthChecks = 1
-	monitor.retryDelay = time.Nanosecond
+	monitor.pollInterval = time.Nanosecond
 
 	if err := monitor.Wait(context.Background(), testTerraformOutputs()); err != nil {
 		t.Fatalf("Wait() treated an in-progress startup as failed: %v", err)
@@ -95,8 +93,7 @@ func TestMonitorClassifiesContainerMissingAfterStartupCompleted(t *testing.T) {
 		{Stdout: "STARTUP_DONE\nCONTAINER_MISSING\nHTTP_HEALTH_FAILED"},
 	}}
 	monitor := NewDeploymentMonitor(runner, &bytes.Buffer{})
-	monitor.attempts = 1
-	monitor.retryDelay = 0
+	monitor.pollInterval = 0
 
 	err := monitor.Wait(context.Background(), testTerraformOutputs())
 	var deployErr *DeploymentError
@@ -111,12 +108,48 @@ func TestMonitorClassifiesInternalHealthFailureAfterStartupCompleted(t *testing.
 		{Stdout: "STARTUP_DONE\nCONTAINER_RUNNING\nHTTP_HEALTH_FAILED"},
 	}}
 	monitor := NewDeploymentMonitor(runner, &bytes.Buffer{})
-	monitor.attempts = 1
-	monitor.retryDelay = 0
+	monitor.pollInterval = 0
 
 	err := monitor.Wait(context.Background(), testTerraformOutputs())
 	var deployErr *DeploymentError
 	if !errors.As(err, &deployErr) || deployErr.Kind != FailureHealthCheck {
 		t.Fatalf("unexpected error: %#v", err)
+	}
+}
+
+func TestMonitorPerformsAFinalSuccessCheckAtTheTimeoutBoundary(t *testing.T) {
+	runner := &recordingRunner{results: []CommandResult{
+		{Stdout: "STARTUP_BEGIN\nCONTAINER_MISSING\nHTTP_HEALTH_FAILED"},
+		{Stdout: "STARTUP_DONE\nCONTAINER_RUNNING\nHTTP_HEALTH_OK"},
+		{},
+	}}
+	monitor := NewDeploymentMonitor(runner, &bytes.Buffer{})
+	monitor.startupTimeout = time.Millisecond
+	monitor.pollInterval = 2 * time.Millisecond
+	monitor.healthChecks = 1
+
+	if err := monitor.Wait(context.Background(), testTerraformOutputs()); err != nil {
+		t.Fatalf("Wait() missed readiness at the timeout boundary: %v", err)
+	}
+}
+
+func TestMonitorTimeoutIncludesFinalDiagnostics(t *testing.T) {
+	runner := &recordingRunner{results: []CommandResult{
+		{Stdout: "STARTUP_BEGIN\nCONTAINER_MISSING\nHTTP_HEALTH_FAILED"},
+		{Stdout: "STARTUP_BEGIN\nCONTAINER_MISSING\nHTTP_HEALTH_FAILED"},
+		{Stdout: "startup is still installing packages"},
+	}}
+	monitor := NewDeploymentMonitor(runner, &bytes.Buffer{})
+	monitor.startupTimeout = time.Millisecond
+	monitor.pollInterval = 2 * time.Millisecond
+
+	err := monitor.Wait(context.Background(), testTerraformOutputs())
+	var deployErr *DeploymentError
+	if !errors.As(err, &deployErr) || deployErr.Kind != FailureVMStartup {
+		t.Fatalf("unexpected error: %#v", err)
+	}
+	if !strings.Contains(deployErr.Diagnostics, "startup is still installing packages") ||
+		!strings.Contains(deployErr.Diagnostics, "startup 제한") {
+		t.Fatalf("timeout diagnostics = %q", deployErr.Diagnostics)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -25,6 +26,7 @@ type upOptions struct {
 	AutoApprove     bool
 	PlanOnly        bool
 	AllowPublicHTTP bool
+	StartupTimeout  time.Duration
 }
 
 type downOptions struct {
@@ -78,11 +80,15 @@ func parseUpOptions(args []string, errOut io.Writer) (upOptions, error) {
 	set.BoolVar(&opts.AutoApprove, "auto-approve", false, "skip the apply confirmation")
 	set.BoolVar(&opts.PlanOnly, "plan-only", false, "validate and create a plan without applying it")
 	set.BoolVar(&opts.AllowPublicHTTP, "allow-public-http", false, "allow 0.0.0.0/0 only when explicitly requested")
+	set.DurationVar(&opts.StartupTimeout, "startup-timeout", defaultStartupTimeout, "maximum wall-clock time for startup verification")
 	if err := set.Parse(args); err != nil {
 		return upOptions{}, err
 	}
 	if set.NArg() != 0 {
 		return upOptions{}, fmt.Errorf("up 명령에 알 수 없는 인자가 있습니다: %s", strings.Join(set.Args(), " "))
+	}
+	if opts.StartupTimeout < minStartupTimeout || opts.StartupTimeout > maxStartupTimeout {
+		return upOptions{}, fmt.Errorf("startup-timeout은 %s 이상 %s 이하여야 합니다", minStartupTimeout, maxStartupTimeout)
 	}
 	return opts, nil
 }
@@ -180,6 +186,7 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 		}
 		fmt.Fprintln(out, "\n인프라 생성 완료. startup, container, HTTP 상태를 확인합니다.")
 		monitor := NewDeploymentMonitor(runner, out)
+		monitor.startupTimeout = opts.StartupTimeout
 		if err := monitor.Wait(ctx, outputs); err != nil {
 			return fmt.Errorf("%w\nVM과 네트워크는 남아 있습니다. 진단 후 down으로 정리하세요", err)
 		}
@@ -382,6 +389,7 @@ func printDeploymentSummary(out io.Writer, cfg DeployConfig, opts upOptions) {
 	fmt.Fprintf(out, "- VM: %s, boot disk: %dGB pd-standard\n", cfg.MachineType, cfg.DiskSizeGB)
 	fmt.Fprintf(out, "- source: %s, host TCP/80 -> container TCP/%d\n", cfg.Source, cfg.ContainerPort)
 	fmt.Fprintf(out, "- HTTP source ranges: %s\n", strings.Join(cfg.AllowedSourceRanges, ", "))
+	fmt.Fprintf(out, "- startup timeout: %s (최대 대기 상한, 성공하면 즉시 종료)\n", opts.StartupTimeout)
 	fmt.Fprintln(out, "- resources: dedicated VPC, subnet, HTTP firewall, IAP SSH firewall, one VM with ephemeral external IP")
 	fmt.Fprintln(out, "- VM service account: none; HTTPS: not configured")
 	if cfg.exposesHTTPToEveryone() {
@@ -558,6 +566,6 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "사용법:")
 	fmt.Fprintln(out, "  gcp-free-deploy init")
 	fmt.Fprintln(out, "  gcp-free-deploy validate [--config path]")
-	fmt.Fprintln(out, "  gcp-free-deploy up [--config path] [--plan-only] [--auto-approve] [--allow-public-http]")
+	fmt.Fprintln(out, "  gcp-free-deploy up [--config path] [--plan-only] [--auto-approve] [--allow-public-http] [--startup-timeout 15m]")
 	fmt.Fprintln(out, "  gcp-free-deploy down [--auto-approve]")
 }

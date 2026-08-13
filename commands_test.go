@@ -8,7 +8,29 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestParseUpOptionsUsesABoundedConfigurableStartupTimeout(t *testing.T) {
+	opts, err := parseUpOptions(nil, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseUpOptions() returned an error: %v", err)
+	}
+	if opts.StartupTimeout != defaultStartupTimeout {
+		t.Fatalf("default startup timeout = %s, want %s", opts.StartupTimeout, defaultStartupTimeout)
+	}
+
+	opts, err = parseUpOptions([]string{"--startup-timeout", "20m"}, &bytes.Buffer{})
+	if err != nil || opts.StartupTimeout != 20*time.Minute {
+		t.Fatalf("configured startup timeout = %s, %v", opts.StartupTimeout, err)
+	}
+
+	for _, value := range []string{"30s", "2h"} {
+		if _, err := parseUpOptions([]string{"--startup-timeout", value}, &bytes.Buffer{}); err == nil {
+			t.Fatalf("parseUpOptions() accepted unsafe startup timeout %s", value)
+		}
+	}
+}
 
 func TestDestroyRefusesWithoutState(t *testing.T) {
 	runner := &recordingRunner{}

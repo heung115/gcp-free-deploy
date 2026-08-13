@@ -50,6 +50,8 @@ startup process가 끝났다는 사실만으로 애플리케이션이 사용 가
 
 VM은 생성됐지만 애플리케이션이 실패하면 startup service 상태, tagged startup log, container 목록, 제한된 container log, 마지막 health 결과를 수집한다. 입력과 Terraform 단계는 typed failure kind로 구분하고, runtime 단계는 startup script의 명시적 marker와 실제 상태를 함께 사용한다. 진단은 길이 제한과 일반 비밀 패턴 masking을 거치지만 모든 애플리케이션 로그 형식을 완전히 정화한다고 보장하지 않는다.
 
+startup 시간은 VM 성능, package mirror, image registry와 zone 상태에 따라 달라지므로 고정 횟수로 성공 시점을 가정하지 않는다. 주기적으로 상태를 확인해 준비되면 즉시 종료하고, 기본 15분의 설정 가능한 wall-clock 상한으로 무한 대기와 비용 누적을 제한한다. 상한 경계에서는 별도 context로 마지막 상태를 다시 확인하고 실패라면 제한된 진단을 수집한다.
+
 ## apply와 destroy 승인
 
 plan은 생성될 리소스와 변경 범위를 검토하는 마지막 경계다. 기본 apply는 저장된 plan과 명시적 `yes`가 필요하며, 자동 승인은 `--auto-approve`에서만 가능하다. HTTP 전체 공개는 자동 승인과 별개로 `--allow-public-http`가 필요하다.
@@ -70,7 +72,7 @@ destroy는 더 보수적이다. local state의 허용된 resource 주소와 `ter
 
 ## 검증 증거의 경계
 
-현재 repository에서 unit/mock test와 Go/Terraform 정적 검증은 수행했다. 실제 GCP resource lifecycle은 수행하지 않았다. 따라서 “Terraform 자동화 흐름을 구현하고 로컬에서 검증했다”는 사실은 말할 수 있지만, “실제 운영 안정성을 확보했다”, “비용을 절감했다”, “무중단·고가용성을 구현했다”, “실제 장애를 복구했다”는 표현은 근거가 없다.
+unit/mock test와 Go/Terraform 정적 검증에 더해 격리된 local state에서 실제 GCP resource lifecycle을 검증했다. `us-central1`의 e2-micro capacity 실패에서는 같은 region fallback과 VM 없는 부분 생성 state의 삭제를 확인했고, `us-west1-a`에서는 전용 VPC·VM 생성, IAP SSH, Docker image 배포, container·내부/외부 HTTP 확인, 전체 destroy와 잔여 리소스 없음까지 확인했다. 이후 startup monitor를 설정 가능한 wall-clock 상한으로 바꾸고 기본 15분 상한에서 약 7분 9초에 준비 상태를 감지해 CLI가 즉시 성공 종료하는 경로를 재검증했다. 기존 Vaultwarden VM은 검증 전후 계속 실행 상태였다. 이 결과는 실제 임시 데모 생명주기 검증 근거이지만, 운영 안정성·비용 절감·무중단·고가용성 근거로 확대하지 않는다.
 
 ## 면접 대비 질문
 
