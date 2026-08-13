@@ -65,3 +65,16 @@ destroy는 더 보수적이다. local state의 허용된 resource 주소, Terraf
 ## 검증 증거의 경계
 
 현재 repository에서 unit/mock test와 Go/Terraform 정적 검증은 수행했다. 실제 GCP resource lifecycle은 수행하지 않았다. 따라서 “Terraform 자동화 흐름을 구현하고 로컬에서 검증했다”는 사실은 말할 수 있지만, “실제 운영 안정성을 확보했다”, “비용을 절감했다”, “무중단·고가용성을 구현했다”, “실제 장애를 복구했다”는 표현은 근거가 없다.
+
+## 면접 대비 질문
+
+1. **왜 VM을 계속 patch하지 않고 재생성하는가?** 데모 환경은 보존할 상태가 적어 선언된 구성으로 다시 만드는 편이 변경 누적과 환경 편차를 줄이기 때문이다.
+2. **Terraform과 Go CLI의 책임을 왜 분리했는가?** Terraform은 리소스 상태를, Go는 입력 검증·승인·실패 분류 같은 실행 절차를 담당하게 해 경계를 분명히 했다.
+3. **왜 default VPC를 사용하지 않았는가?** 기존 firewall rule의 영향을 피하고 이 도구가 만든 네트워크 노출 범위를 코드만으로 확인하기 위해서다.
+4. **왜 전체 공개 HTTP에 별도 option이 필요한가?** `0.0.0.0/0`의 위험을 사용자가 적용 전에 명시적으로 인지하게 하기 위해서다.
+5. **왜 VM service account가 없는가?** 배포 애플리케이션이 GCP API를 호출하지 않아 VM credential과 cloud API 권한이 필요하지 않기 때문이다.
+6. **왜 plan을 저장한 뒤 적용하는가?** 사용자가 검토한 계획과 실제 적용 대상을 동일하게 유지하기 위해서다.
+7. **왜 startup 종료만으로 성공 처리하지 않는가?** 프로세스가 끝나도 container나 애플리케이션은 실패할 수 있어 log·container·내부/외부 HTTP 상태를 함께 확인한다.
+8. **zone fallback을 같은 region으로 제한한 이유는?** 기존 regional subnet을 유지하면서 capacity 부족만 우회하기 위해서다.
+9. **destroy 전에 무엇을 확인하는가?** 허용된 state 주소와 output·변수 파일의 project, region, zone이 일치하는지 확인하고 별도 승인을 받는다.
+10. **운영 환경으로 확장할 때 무엇을 먼저 추가할 것인가?** TLS·인증, remote state locking, CI identity federation, 공급망 검증, 중앙 모니터링을 위험도에 따라 추가한다.
