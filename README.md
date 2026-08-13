@@ -22,7 +22,7 @@
 12. VM 내부와 로컬에서 HTTP health check
 13. 결과 요약
 
-`down`은 로컬 state와 Terraform output에서 삭제 대상을 확인하고, destroy plan과 project·VM·zone을 표시한 다음 사용자 확인 후 삭제합니다. 삭제 뒤 `terraform state list`가 비었는지도 검사합니다.
+`down`은 로컬 state의 실제 리소스 속성과 배포 변수 파일을 교차 확인하고, destroy plan과 project·region·zone·생성된 리소스를 표시한 다음 사용자 확인 후 삭제합니다. VM 생성 전에 apply가 실패한 부분 생성 state도 같은 검증을 거쳐 정리할 수 있습니다. 삭제 뒤 `terraform state list`가 비었는지도 검사합니다.
 
 ## 요구사항
 
@@ -61,7 +61,7 @@ gcloud auth login
 
 릴리스 바이너리를 받은 경우 빈 작업 폴더에서 먼저 실행 자산을 준비합니다. `main.tf`, provider lock, example 설정이 없을 때만 내장 사본을 생성하며 기존 파일은 덮어쓰지 않습니다.
 
-릴리스 파일명은 `gcp-free-deploy-<OS>-<ARCH>` 형식이며 Windows 파일에는 `.exe` 확장자가 붙습니다. 필요하면 내려받은 파일명을 `gcp-free-deploy`로 바꾸고 실행 권한을 부여하세요.
+릴리스 파일명은 `gcp-free-deploy-<OS>-<ARCH>` 형식입니다. 지원 대상은 Linux amd64/arm64, macOS amd64/arm64, Windows amd64이며 Windows 파일에는 `.exe` 확장자가 붙습니다. 고정된 Google provider 7.12.0이 제공되지 않는 Windows arm64 릴리스는 만들지 않습니다. 필요하면 내려받은 파일명을 `gcp-free-deploy`로 바꾸고 실행 권한을 부여하세요.
 
 ```bash
 mkdir gcp-free-deploy-workdir
@@ -183,7 +183,7 @@ gcloud compute ssh gcp-free-deploy-demo \
 go run . down
 ```
 
-`terraform.tfstate`와 배포 변수 파일이 없거나 output에서 project·VM을 확인할 수 없으면 안전하게 중단합니다. 계획을 확인하고 `yes`를 입력해야 삭제됩니다.
+`terraform.tfstate`와 배포 변수 파일이 없거나, state 주소·리소스 type/name·실제 project/region/zone이 이 도구의 구성과 일치하지 않으면 안전하게 중단합니다. VM output에 의존하지 않으므로 VM 생성 전에 network·subnet·firewall만 만들어진 실패 상태도 destroy plan을 만들 수 있습니다. 계획을 확인하고 `yes`를 입력해야 삭제됩니다.
 
 ```bash
 go run . down --auto-approve
@@ -233,7 +233,7 @@ terraform plan -destroy -var-file=.gcp-free-deploy.tfvars.json
 - Go unit test와 race test
 - Go vet와 gofmt
 - Terraform fmt, `init -backend=false`, validate
-- 입력·설정 파일·승인 게이트·zone capacity·startup/container/HTTP 실패·마스킹·state 없는 destroy·Terraform output parsing의 mock test
+- 입력·설정 파일·승인 게이트·zone capacity·startup/container/HTTP 실패·마스킹·state 없는 destroy·부분 생성 state 정리·Terraform output/state parsing의 mock test
 - 추적 파일의 민감정보 패턴과 ignored runtime 파일 검사
 
 실제 GCP `plan`, `apply`, IAP SSH, HTTP 접근, `destroy`는 사용자 승인 없이 실행하지 않았습니다. 따라서 실제 quota, 조직 정책, IAM binding, zone capacity, 이미지별 startup 시간과 애플리케이션 동작은 아직 검증되지 않았습니다.

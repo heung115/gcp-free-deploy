@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -59,6 +60,52 @@ func TestDestroyRefusesANonDefaultWorkspaceBeforeReadingState(t *testing.T) {
 	if len(runner.commands) != 1 || runner.commands[0].Args[0] != "workspace" {
 		t.Fatalf("destroy commands = %#v, want only workspace check", runner.commands)
 	}
+}
+
+func TestDestroyContinuesForVerifiedPartialStateWithoutVMOutputs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "terraform.tfstate"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeTerraformVariables(dir, testDeployConfig()); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{results: []CommandResult{
+		{Stdout: "default\n"},
+		{Stdout: "google_compute_network.demo\ngoogle_compute_subnetwork.demo\ngoogle_compute_firewall.http\ngoogle_compute_firewall.iap_ssh\n"},
+		{Stdout: partialTerraformStateJSON()},
+		{},
+		{},
+		{},
+		{Stdout: "Destroy plan", ExitCode: 2},
+	}}
+	var out bytes.Buffer
+
+	err := destroyTerraform(context.Background(), bytes.NewBufferString("no\n"), &out, runner, dir, downOptions{})
+	var deployErr *DeploymentError
+	if !errors.As(err, &deployErr) || deployErr.Kind != FailureConfirmationRequired {
+		t.Fatalf("unexpected error: %#v", err)
+	}
+	if !strings.Contains(out.String(), "VM: 생성되지 않음") {
+		t.Fatalf("partial destroy summary = %q", out.String())
+	}
+	for _, command := range runner.commands {
+		if len(command.Args) >= 2 && command.Args[0] == "output" {
+			t.Fatalf("partial destroy depended on terraform output: %#v", runner.commands)
+		}
+	}
+}
+
+func partialTerraformStateJSON() string {
+	return `{
+		"format_version":"1.0",
+		"values":{"root_module":{"resources":[
+			{"address":"google_compute_network.demo","type":"google_compute_network","values":{"name":"gcp-free-deploy-network","project":"demo-project-123"}},
+			{"address":"google_compute_subnetwork.demo","type":"google_compute_subnetwork","values":{"name":"gcp-free-deploy-subnet","project":"demo-project-123","region":"us-central1"}},
+			{"address":"google_compute_firewall.http","type":"google_compute_firewall","values":{"name":"gcp-free-deploy-allow-http","project":"demo-project-123"}},
+			{"address":"google_compute_firewall.iap_ssh","type":"google_compute_firewall","values":{"name":"gcp-free-deploy-allow-iap-ssh","project":"demo-project-123"}}
+		]}}
+	}`
 }
 
 func TestConfirmRequiresFullYes(t *testing.T) {

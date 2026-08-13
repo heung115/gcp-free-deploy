@@ -438,11 +438,8 @@ func destroyTerraform(ctx context.Context, in io.Reader, out io.Writer, runner R
 	if err != nil {
 		return &DeploymentError{Kind: FailureUnsafeDestroy, Operation: "destroy 안전 검사", Diagnostics: "배포 변수 파일을 안전하게 확인하지 못했습니다: " + err.Error()}
 	}
-	outputs, err := readTerraformOutputs(ctx, runner, workdir)
+	target, err := readDestroyTarget(ctx, runner, workdir, stateList.Stdout, variables)
 	if err != nil {
-		return &DeploymentError{Kind: FailureUnsafeDestroy, Operation: "destroy 안전 검사", Diagnostics: "state output에서 project와 VM을 확인하지 못했습니다"}
-	}
-	if err := validateDestroyTarget(outputs, variables); err != nil {
 		return &DeploymentError{Kind: FailureUnsafeDestroy, Operation: "destroy 안전 검사", Diagnostics: err.Error()}
 	}
 	if err := ensureRuntimeAssets(workdir); err != nil {
@@ -453,10 +450,15 @@ func destroyTerraform(ctx context.Context, in io.Reader, out io.Writer, runner R
 	}
 
 	fmt.Fprintln(out, "\n삭제 전 확인")
-	fmt.Fprintf(out, "- project: %s\n", outputs.ProjectID.Value)
-	fmt.Fprintf(out, "- VM / zone: %s / %s\n", outputs.VMName.Value, outputs.VMZone.Value)
-	if len(outputs.GeneratedResources.Value) > 0 {
-		fmt.Fprintf(out, "- Terraform 관리 리소스: %s\n", strings.Join(outputs.GeneratedResources.Value, ", "))
+	fmt.Fprintf(out, "- project: %s\n", target.ProjectID)
+	fmt.Fprintf(out, "- region / configured zone: %s / %s\n", target.Region, target.Zone)
+	if target.VMCreated {
+		fmt.Fprintf(out, "- VM: %s\n", target.VMName)
+	} else {
+		fmt.Fprintln(out, "- VM: 생성되지 않음 (부분 생성 state 정리)")
+	}
+	if len(target.Resources) > 0 {
+		fmt.Fprintf(out, "- Terraform 관리 리소스: %s\n", strings.Join(target.Resources, ", "))
 	}
 	fmt.Fprintln(out, "- 로컬 state가 관리하는 이 프로젝트 리소스만 삭제합니다.")
 
