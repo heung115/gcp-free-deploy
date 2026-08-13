@@ -9,16 +9,18 @@
 `up`은 다음 순서를 지킵니다.
 
 1. JSON 설정과 입력값 검증
-2. `terraform fmt -check`
-3. `terraform init -backend=false`
-4. `terraform validate`
-5. Terraform plan 생성
-6. project·zone·machine type·disk·공개 포트·생성 리소스 표시
-7. 사용자 확인 후 저장된 plan 적용
-8. IAP SSH로 startup 완료 대기
-9. Docker container 실행 상태 확인
-10. VM 내부와 로컬에서 HTTP health check
-11. 결과 요약
+2. 누락된 Terraform·provider lock 자산 준비
+3. default workspace와 기존 state 주소·대상 검증
+4. `terraform fmt -check`
+5. `terraform init -backend=false`
+6. `terraform validate`
+7. Terraform plan 생성
+8. project·zone·machine type·disk·공개 포트·생성 리소스 표시
+9. 사용자 확인 후 저장된 plan 적용
+10. IAP SSH로 startup 완료 대기
+11. Docker container 실행 상태 확인
+12. VM 내부와 로컬에서 HTTP health check
+13. 결과 요약
 
 `down`은 로컬 state와 Terraform output에서 삭제 대상을 확인하고, destroy plan과 project·VM·zone을 표시한 다음 사용자 확인 후 삭제합니다. 삭제 뒤 `terraform state list`가 비었는지도 검사합니다.
 
@@ -56,6 +58,19 @@ gcloud auth login
 참고: [Compute Engine IAM roles](https://cloud.google.com/compute/docs/access/iam), [IAP TCP forwarding](https://cloud.google.com/iap/docs/using-tcp-forwarding), [OS Login setup](https://cloud.google.com/compute/docs/oslogin/set-up-oslogin), [Service Usage](https://cloud.google.com/service-usage/docs/enable-disable)
 
 ## 빠른 시작
+
+릴리스 바이너리를 받은 경우 빈 작업 폴더에서 먼저 실행 자산을 준비합니다. `main.tf`, provider lock, example 설정이 없을 때만 내장 사본을 생성하며 기존 파일은 덮어쓰지 않습니다.
+
+릴리스 파일명은 `gcp-free-deploy-<OS>-<ARCH>` 형식이며 Windows 파일에는 `.exe` 확장자가 붙습니다. 필요하면 내려받은 파일명을 `gcp-free-deploy`로 바꾸고 실행 권한을 부여하세요.
+
+```bash
+mkdir gcp-free-deploy-workdir
+cd gcp-free-deploy-workdir
+gcp-free-deploy init
+cp gcp-free-deploy.example.json gcp-free-deploy.json
+```
+
+소스에서 실행하려면 다음처럼 저장소를 복제합니다.
 
 ```bash
 git clone https://github.com/heung115/gcp-free-deploy.git
@@ -107,6 +122,17 @@ go run . up --plan-only
 ```
 
 `--plan-only`는 read-only cloud 조회가 필요할 수 있지만 `apply`는 실행하지 않습니다.
+
+### 기존 state가 있는 경우
+
+`up`은 plan 전에 local state 주소와 기존 배포의 project·region·zone을 확인합니다. 공개 v0.1.x의 `free_vm`, `allow_http`, `compute_api` 같은 legacy 주소나 다른 대상이 섞여 있으면 중단합니다. 이때 `terraform.tfstate`를 삭제하거나 새 변수 파일을 억지로 맞추지 마세요.
+
+1. `terraform state list`로 현재 관리 주소를 확인합니다.
+2. GCP Console 또는 read-only `gcloud` 조회로 실제 VM·firewall·API 상태와 project·zone을 확인합니다.
+3. 기존 리소스를 보존해야 하면 별도 작업 폴더로 state/configuration을 격리하거나 명시적인 `terraform state mv`·`moved` block migration을 검토합니다.
+4. 삭제가 필요해도 기존 configuration과 state를 함께 보존한 상태에서 별도 계획·승인을 거칩니다.
+
+현재 저장소의 `down`은 legacy state를 자동 삭제하지 않습니다.
 
 ## 배포
 
@@ -196,6 +222,7 @@ terraform plan -destroy -var-file=.gcp-free-deploy.tfvars.json
 - health endpoint 경로는 `/`로 고정되어 있습니다.
 - zone fallback은 동일 region 안에서만 허용합니다. subnet을 region별로 다시 만들지 않습니다.
 - 공개 v0.1.x의 기존 state는 자동 migration·destroy 대상이 아닙니다. 새 변수 파일을 억지로 맞추지 말고 기존 configuration과 state를 별도로 검토해야 합니다.
+- 바이너리의 내장 자산은 누락 파일을 준비하기 위한 bootstrap용입니다. 기존 `main.tf`나 lock 파일의 버전이 바이너리와 다른 경우 자동으로 덮어쓰거나 migration하지 않습니다.
 - state lock이 없는 로컬 state이므로 동시에 두 실행을 시작하면 안 됩니다.
 - HA, autoscaling, SLO, 장기 patching, backup/restore, centralized logging을 제공하지 않습니다.
 

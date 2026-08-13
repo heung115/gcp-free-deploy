@@ -56,6 +56,12 @@ plan은 생성될 리소스와 변경 범위를 검토하는 마지막 경계다
 
 destroy는 더 보수적이다. local state의 허용된 resource 주소, Terraform output의 project·VM·zone, 권한이 제한된 배포 변수 파일을 모두 확인한다. output과 변수 파일의 project·region·zone이 일치할 때만 destroy plan을 만들고 승인받는다. state가 없거나 대상이 불명확하면 실패한다. destroy 뒤 state에 리소스 주소가 남으면 성공으로 표시하지 않고 비용 위험과 확인 방법을 알린다.
 
+`up`도 기존 local state가 있으면 plan보다 먼저 같은 안전 경계를 적용한다. 현재 resource 주소가 아닌 legacy·unrelated 주소가 있거나 기존 배포와 요청한 project·region·zone이 다르면 중단한다. state 파일을 삭제해 우회하지 않고 실제 GCP 리소스를 확인한 뒤 명시적으로 migration하거나 별도 작업 폴더로 격리해야 한다.
+
+## 릴리스 실행 모델
+
+릴리스 바이너리는 Terraform 구성, provider lock, example 설정을 내장한다. `init`, `validate`, `up`, `down`은 실행 폴더에 누락된 자산만 materialize하며 사용자 파일을 덮어쓰지 않는다. 이 방식은 단독 바이너리를 실행 가능하게 하면서도 기존 Terraform 변경을 보존한다. 이미 존재하는 구성의 버전 차이는 자동 migration 대상이 아니므로 사용자가 diff와 state를 검토해야 한다.
+
 ## 비용과 운영 확장
 
 작은 machine type과 disk, 임시 IP를 사용하지만 Free Tier나 무과금을 보장하지 않는다. 실제 비용 성과를 주장하지 않으며 plan 확인과 destroy 습관을 비용 안전장치로 사용한다.
@@ -76,5 +82,5 @@ destroy는 더 보수적이다. local state의 허용된 resource 주소, Terraf
 6. **왜 plan을 저장한 뒤 적용하는가?** 사용자가 검토한 계획과 실제 적용 대상을 동일하게 유지하기 위해서다.
 7. **왜 startup 종료만으로 성공 처리하지 않는가?** 프로세스가 끝나도 container나 애플리케이션은 실패할 수 있어 log·container·내부/외부 HTTP 상태를 함께 확인한다.
 8. **zone fallback을 같은 region으로 제한한 이유는?** 기존 regional subnet을 유지하면서 capacity 부족만 우회하기 위해서다.
-9. **destroy 전에 무엇을 확인하는가?** 허용된 state 주소와 output·변수 파일의 project, region, zone이 일치하는지 확인하고 별도 승인을 받는다.
+9. **state 혼입을 어떻게 막는가?** `up`과 `destroy` 모두 default workspace, 허용된 state 주소, output·변수 파일의 project·region·zone 일치를 확인하고 불명확하면 plan 전에 중단한다.
 10. **운영 환경으로 확장할 때 무엇을 먼저 추가할 것인가?** TLS·인증, remote state locking, CI identity federation, 공급망 검증, 중앙 모니터링을 위험도에 따라 추가한다.

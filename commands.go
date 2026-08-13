@@ -38,6 +38,15 @@ func runCLI(ctx context.Context, args []string, in io.Reader, out, errOut io.Wri
 	}
 
 	switch args[0] {
+	case "init":
+		if len(args) != 1 {
+			return fmt.Errorf("init 명령에는 추가 인자를 사용할 수 없습니다")
+		}
+		if err := ensureRuntimeAssets(workdir); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "실행 파일을 준비했습니다: main.tf, provider lock, example 설정")
+		return nil
 	case "up":
 		opts, err := parseUpOptions(args[1:], errOut)
 		if err != nil {
@@ -104,6 +113,9 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 			Diagnostics: "0.0.0.0/0은 전체 인터넷 공개입니다. 실행하려면 --allow-public-http를 명시해야 합니다",
 		}
 	}
+	if err := ensureRuntimeAssets(workdir); err != nil {
+		return err
+	}
 	if err := requireTool("terraform"); err != nil {
 		return err
 	}
@@ -111,6 +123,9 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 		if err := requireTool("gcloud"); err != nil {
 			return err
 		}
+	}
+	if err := guardUpState(ctx, runner, workdir, cfg); err != nil {
+		return err
 	}
 
 	printDeploymentSummary(out, cfg, opts)
@@ -187,14 +202,13 @@ func validateProject(ctx context.Context, args []string, out, errOut io.Writer, 
 	if set.NArg() != 0 {
 		return fmt.Errorf("validate 명령에 알 수 없는 인자가 있습니다")
 	}
-	cfg, err := LoadDeployConfig(*configPath)
-	if err != nil {
+	if _, err := LoadDeployConfig(*configPath); err != nil {
 		return &DeploymentError{Kind: FailureInvalidConfig, Operation: "설정 검증", Diagnostics: err.Error()}
 	}
 	if err := requireTool("terraform"); err != nil {
 		return err
 	}
-	if _, err := writeTerraformVariables(workdir, cfg); err != nil {
+	if err := ensureRuntimeAssets(workdir); err != nil {
 		return err
 	}
 	if err := runTerraformPreflight(ctx, runner, workdir); err != nil {
@@ -202,6 +216,83 @@ func validateProject(ctx context.Context, args []string, out, errOut io.Writer, 
 	}
 	fmt.Fprintln(out, "설정과 Terraform 정적 검증을 통과했습니다. 실제 GCP 조회나 변경은 수행하지 않았습니다.")
 	return nil
+}
+
+func guardUpState(ctx context.Context, runner Runner, workdir string, desired DeployConfig) error {
+	workspace := runner.Run(ctx, Command{Name: "terraform", Args: []string{"workspace", "show", "-no-color"}, Dir: workdir})
+	if workspace.ExitCode != 0 {
+		return newUnsafeStateError("Terraform workspace를 확인하지 못했습니다")
+	}
+	if strings.TrimSpace(workspace.Stdout) != "default" {
+		return newUnsafeStateError("default가 아닌 Terraform workspace는 지원하지 않습니다")
+	}
+
+	statePath := filepath.Join(workdir, "terraform.tfstate")
+	info, err := os.Lstat(statePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			backupPath := filepath.Join(workdir, "terraform.tfstate.backup")
+			if _, backupErr := os.Lstat(backupPath); backupErr == nil {
+				return newUnsafeStateError("활성 state 없이 terraform.tfstate.backup만 남아 있습니다")
+			} else if !errors.Is(backupErr, os.ErrNotExist) {
+				return newUnsafeStateError("terraform.tfstate.backup을 확인하지 못했습니다")
+			}
+			return nil
+		}
+		return newUnsafeStateError("terraform.tfstate를 확인하지 못했습니다")
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() == 0 {
+		return newUnsafeStateError("terraform.tfstate가 비어 있거나 안전한 일반 파일이 아닙니다")
+	}
+
+	stateList := runner.Run(ctx, Command{Name: "terraform", Args: []string{"state", "list"}, Dir: workdir})
+	if stateList.ExitCode != 0 {
+		return newUnsafeStateError("Terraform state 주소를 읽지 못했습니다")
+	}
+	if strings.TrimSpace(stateList.Stdout) == "" {
+		return nil
+	}
+	if err := validateOwnedState(stateList.Stdout); err != nil {
+		return newUnsafeStateError(err.Error())
+	}
+
+	variables, err := readTerraformVariables(filepath.Join(workdir, terraformVariablesName))
+	if err != nil {
+		return newUnsafeStateError("기존 배포 변수 파일을 안전하게 확인하지 못했습니다")
+	}
+	outputs, err := readTerraformOutputs(ctx, runner, workdir)
+	if err != nil {
+		return newUnsafeStateError("기존 state output에서 project와 VM을 확인하지 못했습니다")
+	}
+	if err := validateDestroyTarget(outputs, variables); err != nil {
+		return newUnsafeStateError(err.Error())
+	}
+	if err := validateDesiredStateTarget(desired, variables); err != nil {
+		return newUnsafeStateError(err.Error())
+	}
+	return nil
+}
+
+func validateDesiredStateTarget(desired DeployConfig, existing terraformVariables) error {
+	if desired.ProjectID != existing.ProjectID || regionFromZone(desired.Zone) != existing.Region {
+		return fmt.Errorf("요청한 project 또는 region이 기존 state 대상과 일치하지 않습니다")
+	}
+	allowedZones := append([]string{desired.Zone}, desired.FallbackZones...)
+	for _, zone := range allowedZones {
+		if zone == existing.Zone {
+			return nil
+		}
+	}
+	return fmt.Errorf("요청한 zone 목록에 기존 state의 zone이 없습니다")
+}
+
+func newUnsafeStateError(reason string) error {
+	return &DeploymentError{
+		Kind:      FailureUnsafeState,
+		Operation: "up state 안전 검사",
+		Diagnostics: reason + ". state를 삭제하지 말고 실제 GCP 리소스를 확인한 뒤 state migration을 수행하거나 " +
+			"새 작업 폴더에서 격리해 실행하세요",
+	}
 }
 
 func readOrPromptConfig(path string, in io.Reader, out io.Writer) (DeployConfig, error) {
@@ -331,6 +422,10 @@ func destroyTerraform(ctx context.Context, in io.Reader, out io.Writer, runner R
 	if err := requireTool("terraform"); err != nil {
 		return err
 	}
+	workspace := runner.Run(ctx, Command{Name: "terraform", Args: []string{"workspace", "show", "-no-color"}, Dir: workdir})
+	if workspace.ExitCode != 0 || strings.TrimSpace(workspace.Stdout) != "default" {
+		return &DeploymentError{Kind: FailureUnsafeDestroy, Operation: "destroy 안전 검사", Diagnostics: "default Terraform workspace만 삭제할 수 있습니다"}
+	}
 	stateList := runner.Run(ctx, Command{Name: "terraform", Args: []string{"state", "list"}, Dir: workdir})
 	if stateList.ExitCode != 0 {
 		return &DeploymentError{Kind: FailureUnsafeDestroy, Operation: "destroy 안전 검사", Diagnostics: "Terraform state 주소를 읽지 못했습니다"}
@@ -349,6 +444,9 @@ func destroyTerraform(ctx context.Context, in io.Reader, out io.Writer, runner R
 	}
 	if err := validateDestroyTarget(outputs, variables); err != nil {
 		return &DeploymentError{Kind: FailureUnsafeDestroy, Operation: "destroy 안전 검사", Diagnostics: err.Error()}
+	}
+	if err := ensureRuntimeAssets(workdir); err != nil {
+		return err
 	}
 	if err := runTerraformPreflight(ctx, runner, workdir); err != nil {
 		return err
@@ -456,6 +554,7 @@ func rootCause(err error) error {
 
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "사용법:")
+	fmt.Fprintln(out, "  gcp-free-deploy init")
 	fmt.Fprintln(out, "  gcp-free-deploy validate [--config path]")
 	fmt.Fprintln(out, "  gcp-free-deploy up [--config path] [--plan-only] [--auto-approve] [--allow-public-http]")
 	fmt.Fprintln(out, "  gcp-free-deploy down [--auto-approve]")

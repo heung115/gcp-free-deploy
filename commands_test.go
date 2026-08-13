@@ -44,6 +44,23 @@ func TestDestroyRefusesSymlinkedStateWithoutRunningTerraform(t *testing.T) {
 	}
 }
 
+func TestDestroyRefusesANonDefaultWorkspaceBeforeReadingState(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "terraform.tfstate"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{results: []CommandResult{{Stdout: "production\n"}}}
+
+	err := destroyTerraform(context.Background(), bytes.NewBufferString("yes\n"), &bytes.Buffer{}, runner, dir, downOptions{})
+	var deployErr *DeploymentError
+	if !errors.As(err, &deployErr) || deployErr.Kind != FailureUnsafeDestroy {
+		t.Fatalf("unexpected error: %#v", err)
+	}
+	if len(runner.commands) != 1 || runner.commands[0].Args[0] != "workspace" {
+		t.Fatalf("destroy commands = %#v, want only workspace check", runner.commands)
+	}
+}
+
 func TestConfirmRequiresFullYes(t *testing.T) {
 	for _, answer := range []string{"y\n", "Y\n", "\n", "no\n"} {
 		approved, err := confirm(bytes.NewBufferString(answer), &bytes.Buffer{}, "confirm: ")
@@ -80,6 +97,110 @@ func TestValidateOwnedStateAcceptsOnlyCurrentResources(t *testing.T) {
 	if err := validateOwnedState(legacy); err == nil {
 		t.Fatal("validateOwnedState() accepted legacy resources without an explicit migration")
 	}
+}
+
+func TestUpStateGuardRejectsLegacyStateBeforePlanning(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "terraform.tfstate"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{results: []CommandResult{{
+		Stdout: "default\n",
+	}, {
+		Stdout: "google_compute_firewall.allow_http\ngoogle_compute_instance.free_vm\ngoogle_project_service.compute_api\n",
+	}}}
+	cfg := testDeployConfig()
+
+	err := guardUpState(context.Background(), runner, dir, cfg)
+	var deployErr *DeploymentError
+	if !errors.As(err, &deployErr) || deployErr.Kind != FailureUnsafeState {
+		t.Fatalf("unexpected error: %#v", err)
+	}
+	if len(runner.commands) != 2 || runner.commands[1].Args[0] != "state" {
+		t.Fatalf("commands = %#v, want workspace check then terraform state list", runner.commands)
+	}
+}
+
+func TestUpStateGuardAllowsAWorkdirWithoutState(t *testing.T) {
+	runner := &recordingRunner{results: []CommandResult{{Stdout: "default\n"}}}
+	if err := guardUpState(context.Background(), runner, t.TempDir(), testDeployConfig()); err != nil {
+		t.Fatalf("guardUpState() rejected a clean workdir: %v", err)
+	}
+	if len(runner.commands) != 1 || runner.commands[0].Args[0] != "workspace" {
+		t.Fatalf("guardUpState() did not verify the workspace: %#v", runner.commands)
+	}
+}
+
+func TestUpStateGuardRejectsAnOrphanedStateBackup(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "terraform.tfstate.backup"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{results: []CommandResult{{Stdout: "default\n"}}}
+
+	err := guardUpState(context.Background(), runner, dir, testDeployConfig())
+	var deployErr *DeploymentError
+	if !errors.As(err, &deployErr) || deployErr.Kind != FailureUnsafeState {
+		t.Fatalf("unexpected error: %#v", err)
+	}
+}
+
+func TestUpStateGuardRejectsANonDefaultWorkspace(t *testing.T) {
+	runner := &recordingRunner{results: []CommandResult{{Stdout: "production\n"}}}
+
+	err := guardUpState(context.Background(), runner, t.TempDir(), testDeployConfig())
+	var deployErr *DeploymentError
+	if !errors.As(err, &deployErr) || deployErr.Kind != FailureUnsafeState {
+		t.Fatalf("unexpected error: %#v", err)
+	}
+}
+
+func TestUpStateGuardRejectsAProjectMismatch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "terraform.tfstate"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	existing := testDeployConfig()
+	if _, err := writeTerraformVariables(dir, existing); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{results: []CommandResult{
+		{Stdout: "default\n"},
+		{Stdout: "google_compute_network.demo\ngoogle_compute_subnetwork.demo\ngoogle_compute_firewall.http\ngoogle_compute_firewall.iap_ssh\ngoogle_compute_instance.demo\n"},
+		{Stdout: testTerraformOutputsJSON()},
+	}}
+	desired := existing
+	desired.ProjectID = "another-project-123"
+
+	err := guardUpState(context.Background(), runner, dir, desired)
+	var deployErr *DeploymentError
+	if !errors.As(err, &deployErr) || deployErr.Kind != FailureUnsafeState {
+		t.Fatalf("unexpected error: %#v", err)
+	}
+}
+
+func testDeployConfig() DeployConfig {
+	return DeployConfig{
+		ProjectID:           "demo-project-123",
+		Zone:                "us-central1-a",
+		Source:              "docker",
+		DockerImage:         "nginx:1.27.4",
+		ContainerPort:       80,
+		AllowedSourceRanges: []string{"203.0.113.10/32"},
+		MachineType:         "e2-micro",
+		DiskSizeGB:          10,
+	}
+}
+
+func testTerraformOutputsJSON() string {
+	return `{
+		"project_id":{"sensitive":false,"value":"demo-project-123"},
+		"region":{"sensitive":false,"value":"us-central1"},
+		"vm_name":{"sensitive":false,"value":"gcp-free-deploy-demo"},
+		"vm_zone":{"sensitive":false,"value":"us-central1-a"},
+		"website_url":{"sensitive":false,"value":"http://203.0.113.10"},
+		"generated_resources":{"sensitive":false,"value":["gcp-free-deploy-network"]}
+	}`
 }
 
 func TestValidateDestroyTargetRejectsStateAndVariablesMismatch(t *testing.T) {

@@ -157,6 +157,7 @@ type FailureKind string
 
 const (
 	FailureInvalidConfig        FailureKind = "invalid_config"
+	FailureUnsafeState          FailureKind = "unsafe_state"
 	FailureTerraformFmt         FailureKind = "terraform_fmt"
 	FailureTerraformInit        FailureKind = "terraform_init"
 	FailureTerraformValidate    FailureKind = "terraform_validate"

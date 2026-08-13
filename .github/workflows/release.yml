@@ -32,8 +32,23 @@ jobs:
             - name: Build binaries
               run: |
                   mkdir -p dist
+                  binary="dist/gcp-free-deploy-${{ matrix.goos }}-${{ matrix.goarch }}"
+                  if [ "${{ matrix.goos }}" = "windows" ]; then
+                    binary="${binary}.exe"
+                  fi
                   GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-                    go build -o dist/gcp-free-deploy-${{ matrix.goos }}-${{ matrix.goarch }} .
+                    go build -o "$binary" .
+
+            - name: Smoke test native standalone binary
+              if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+              run: |
+                  smoke_dir="$(mktemp -d)"
+                  cp dist/gcp-free-deploy-linux-amd64 "$smoke_dir/gcp-free-deploy"
+                  cd "$smoke_dir"
+                  ./gcp-free-deploy init
+                  test -f main.tf
+                  test -f .terraform.lock.hcl
+                  test -f gcp-free-deploy.example.json
 
             - name: Upload artifact
               uses: actions/upload-artifact@v4
