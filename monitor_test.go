@@ -276,8 +276,8 @@ func TestMonitorPerformsAFinalSuccessCheckAtTheTimeoutBoundary(t *testing.T) {
 		{},
 	}}
 	monitor := NewDeploymentMonitor(runner, &bytes.Buffer{})
-	monitor.startupTimeout = time.Millisecond
-	monitor.pollInterval = 2 * time.Millisecond
+	monitor.startupTimeout = 10 * time.Millisecond
+	monitor.pollInterval = time.Hour
 	monitor.healthChecks = 1
 
 	if err := monitor.Wait(context.Background(), testTerraformOutputs()); err != nil {
@@ -292,8 +292,8 @@ func TestMonitorTimeoutIncludesFinalDiagnostics(t *testing.T) {
 		{Stdout: "startup is still installing packages"},
 	}}
 	monitor := NewDeploymentMonitor(runner, &bytes.Buffer{})
-	monitor.startupTimeout = time.Millisecond
-	monitor.pollInterval = 2 * time.Millisecond
+	monitor.startupTimeout = 10 * time.Millisecond
+	monitor.pollInterval = time.Hour
 
 	err := monitor.Wait(context.Background(), testTerraformOutputs())
 	var deployErr *DeploymentError

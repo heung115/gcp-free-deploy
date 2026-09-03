@@ -79,7 +79,7 @@ func TestVerifyManagedTerraformFilesAcceptsWindowsLineEndings(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		data = []byte(strings.ReplaceAll(string(data), "\n", "\r\n"))
+		data = []byte(strings.ReplaceAll(string(normalizeLineEndings(data)), "\n", "\r\n"))
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -109,6 +109,15 @@ func TestPriorMainTFDigestIsExplicitlyAllowlisted(t *testing.T) {
 	}
 	if len(compatibleManagedAssetSHA256["main.tf"]) != 1 {
 		t.Fatalf("main.tf compatible digest count = %d, want exactly 1 reviewed historical asset", len(compatibleManagedAssetSHA256["main.tf"]))
+	}
+}
+
+func TestPriorTerraformLockDigestIsExplicitlyAllowlisted(t *testing.T) {
+	if _, ok := compatibleManagedAssetSHA256[".terraform.lock.hcl"][compatiblePriorTerraformLockSHA256]; !ok {
+		t.Fatalf("prior compatible lock digest %s is not allowlisted", compatiblePriorTerraformLockSHA256)
+	}
+	if len(compatibleManagedAssetSHA256[".terraform.lock.hcl"]) != 1 {
+		t.Fatalf("lock compatible digest count = %d, want exactly 1 reviewed historical asset", len(compatibleManagedAssetSHA256[".terraform.lock.hcl"]))
 	}
 }
 

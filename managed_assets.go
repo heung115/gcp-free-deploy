@@ -10,6 +10,7 @@ import (
 )
 
 const compatiblePriorMainTFSHA256 = "8120c94c2f3e7342101e8575fc4dd0cdf7987d478e940d0490516f014363f307"
+const compatiblePriorTerraformLockSHA256 = "5e5f73fa72b5b5b453d26777834d6816d80d3fb5187c9df07c1203773f938f10"
 
 // compatibleManagedAssetSHA256 contains narrowly reviewed historical assets
 // that are functionally equivalent to the current embedded configuration. The
@@ -19,6 +20,9 @@ const compatiblePriorMainTFSHA256 = "8120c94c2f3e7342101e8575fc4dd0cdf7987d478e9
 var compatibleManagedAssetSHA256 = map[string]map[string]struct{}{
 	"main.tf": {
 		compatiblePriorMainTFSHA256: {},
+	},
+	".terraform.lock.hcl": {
+		compatiblePriorTerraformLockSHA256: {},
 	},
 }
 

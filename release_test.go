@@ -162,5 +162,5 @@ func readRepositoryFile(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(data)
+	return string(normalizeLineEndings(data))
 }
