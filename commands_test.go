@@ -116,7 +116,7 @@ func TestFreeTierAssessmentExplainsProfileAndExternalIPv4Cost(t *testing.T) {
 			if !strings.Contains(got, tt.want) {
 				t.Fatalf("assessment = %q, want it to contain %q", got, tt.want)
 			}
-			if !strings.Contains(got, "separately priced external IPv4 address") {
+			if !strings.Contains(got, "external IPv4 address-hours") {
 				t.Fatalf("assessment omitted external IPv4 cost warning: %q", got)
 			}
 		})
@@ -128,7 +128,7 @@ func TestDeploymentSummaryIncludesFreeTierAssessment(t *testing.T) {
 	var out bytes.Buffer
 	printDeploymentSummary(&out, cfg, upOptions{StartupTimeout: defaultStartupTimeout})
 
-	if !strings.Contains(out.String(), "Free Tier VM profile") || !strings.Contains(out.String(), "separately priced external IPv4 address") {
+	if !strings.Contains(out.String(), "Free Tier VM profile") || !strings.Contains(out.String(), "external IPv4 address-hours") {
 		t.Fatalf("deployment summary omitted Free Tier assessment: %q", out.String())
 	}
 }

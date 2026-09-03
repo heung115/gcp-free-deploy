@@ -156,6 +156,27 @@ func TestSupportedGoVersionIsSharedBySourceDocsAndWorkflows(t *testing.T) {
 	}
 }
 
+func TestCostDocsDoNotRepeatTheDisprovedOneHourIPv4Claim(t *testing.T) {
+	for _, path := range []string{
+		"README.md",
+		"README.ko.md",
+		"docs/costs.md",
+		"docs/architecture-and-operations.md",
+	} {
+		content := strings.ToLower(readRepositoryFile(t, path))
+		for _, obsolete := range []string{
+			"only one free hour",
+			"one hour/month",
+			"월 1시간뿐",
+			"$3.60–$3.72/month in ipv4",
+		} {
+			if strings.Contains(content, obsolete) {
+				t.Errorf("%s still contains the obsolete external IPv4 claim %q", path, obsolete)
+			}
+		}
+	}
+}
+
 func readRepositoryFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

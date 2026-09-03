@@ -29,26 +29,36 @@ Sources:
 - [E2 machine specifications](https://cloud.google.com/compute/docs/general-purpose-machines)
 - [Disk and image pricing](https://cloud.google.com/compute/disks-image-pricing)
 
-## The external IPv4 charge
+## External IPv4 pricing is tiered
 
 This tool assigns one ephemeral external IPv4 address so that the deployed HTTP
-service can be opened in a browser and checked from outside the VM. Google
-currently lists both static and ephemeral external IPv4 addresses attached to a
-standard VM at **$0.005/hour**, with only **one free hour per billing account per
-month**.
+service can be opened in a browser and checked from outside the VM. Google's VPC
+price table lists **$0.005 per address-hour** for an in-use static or ephemeral
+IPv4 address on a standard VM. That paid rate is not applied to every hour from
+zero, however.
 
-At that rate, a continuously running address is approximately:
+The Billing Pricing API for the `External IP Charge on a Standard VM` SKU
+(`C054-7F72-A02E`) exposes a monthly, billing-account-wide zero-price tier before
+the paid tier. The threshold can appear as 720 or 744 address-hours depending on
+the month and billing context. It often covers most or all of one continuously
+attached address. If a 31-day month uses a 720-hour threshold, for example, only
+the final 24 hours enter the paid tier. Therefore, multiplying a full month
+directly by `$0.005` and presenting `$3.60–$3.72` as the expected charge is
+incorrect.
 
-| Month length | Address hours | Approximate address charge |
-| --- | ---: | ---: |
-| 30 days | 720 | $3.60 |
-| 31 days | 744 | $3.72 |
+The allowance is shared by the billing account. Two overlapping addresses, an
+additional VM, or other consumption of the same SKU can exhaust it sooner; hours
+above the account's current threshold use the paid tier. Currency, contract
+pricing, credits, and delayed usage attribution can also change the amount shown
+on an invoice. Delete the VM when finished so its ephemeral address is released.
+Merely stopping a VM can leave other billable resources such as its disk in
+place.
 
-These are simple pre-tax calculations, not quotes. Deleting the VM releases its
-ephemeral address. Merely stopping a VM can leave other billable resources such
-as its disk in place.
+Sources:
 
-Source: [VPC external IP address pricing](https://cloud.google.com/vpc/network-pricing#ipaddress)
+- [VPC external IP address pricing](https://cloud.google.com/vpc/network-pricing#ipaddress)
+- [Get Google Cloud pricing information with the Pricing API](https://cloud.google.com/billing/docs/how-to/get-pricing-information-api)
+- [Pricing API tier model](https://cloud.google.com/billing/docs/reference/pricing-api/rest/v1beta/skus.price/get)
 
 ## How this repository maps to the profile
 
@@ -58,7 +68,7 @@ Source: [VPC external IP address pricing](https://cloud.google.com/vpc/network-p
 | `zone` | Example uses `us-central1-a`; any valid zone is allowed | Only the three documented US regions are eligible |
 | Boot disk | Fixed to `pd-standard`; config allows 10–30 GB | Other disks in the billing account count toward the same allowance |
 | VM image | Standard Ubuntu 24.04 LTS | Premium OS images are not used |
-| External IP | One ephemeral IPv4 using Standard Network Tier | Separately priced as described above |
+| External IP | One ephemeral IPv4 using Standard Network Tier | Uses the account-wide monthly address-hour tier; excess usage is billed |
 | Snapshots | None created | Snapshots would have separate storage and possible network charges |
 | DNS and TLS | Not created | Cloud DNS and managed frontend services would be separate resources |
 
@@ -66,6 +76,13 @@ Standard Network Tier has its own current transfer pricing. Do not treat a
 network pricing tier as an extension of the Compute Engine Free Tier guarantee;
 check both the Free Program page and the live
 [VPC network pricing](https://cloud.google.com/vpc/network-pricing) page.
+
+A small non-zero bill can come from IPv4 hours just beyond the zero-price tier,
+outbound traffic just beyond an applicable transfer allowance, overlapping
+resources, a partially billed month, taxes, or rounding. In Billing Reports,
+group by SKU and inspect `External IP Charge on a Standard VM`, persistent-disk,
+instance-core/RAM, and network data transfer rows instead of inferring the cause
+from the total alone.
 
 ## Before `up`
 
@@ -78,7 +95,8 @@ check both the Free Program page and the live
 - Keep total eligible `pd-standard` usage at or below the current account-wide
   allowance.
 - Review the Terraform plan instead of using `--auto-approve` on a first run.
-- Decide how long the external IPv4 address may remain allocated.
+- Check whether other external IPv4 addresses already consume the shared monthly
+  address-hour tier.
 - Set your own reminder or operational expiry: the CLI does not stop or delete
   a deployment automatically.
 - Create a billing budget or alert if useful, while remembering that a standard

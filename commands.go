@@ -706,5 +706,5 @@ func printFreeTierAssessment(out io.Writer, cfg DeployConfig) {
 	default:
 		fmt.Fprintf(out, "- Free Tier VM profile: does not match (region %s is not an eligible Compute Engine Free Tier region)\n", region)
 	}
-	fmt.Fprintln(out, "- COST WARNING: this deployment uses a separately priced external IPv4 address, even when VM usage qualifies for the Free Tier")
+	fmt.Fprintln(out, "- COST WARNING: external IPv4 address-hours and outbound traffic use account-wide monthly pricing tiers; excess usage can be billed")
 }

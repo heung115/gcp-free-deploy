@@ -15,11 +15,13 @@ It is intended for disposable demos and learning environments, not production.
 > [!WARNING]
 > **Free Tier-compatible does not mean a guaranteed $0 bill.** The default VM,
 > region, and disk profile target the Google Cloud Free Tier, but this tool also
-> assigns an external IPv4 address. Google currently provides only one free
-> external IPv4 hour per billing account each month; a continuously running VM
-> can therefore incur roughly **$3.60–$3.72/month in IPv4 charges alone**, before
-> taxes and other usage. Read [Cost and Free Tier limits](docs/costs.md) before
-> applying a plan. Pricing last checked: **2026-09-03**.
+> assigns an external IPv4 address. Google's current Billing Pricing API shows a
+> monthly zero-price address-hour tier before the **$0.005/hour** paid tier. It
+> often covers most or all of one continuously used address, but the allowance
+> is pooled across the billing account. Excess address-hours, outbound data,
+> taxes, or other resources can still produce a bill. Read
+> [Cost and Free Tier limits](docs/costs.md) before applying a plan. Pricing last
+> checked: **2026-09-03**.
 
 ## Why use it?
 
@@ -240,7 +242,7 @@ shape:
 | Region | `us-west1`, `us-central1`, or `us-east1` | Other regions are outside the Compute Engine Free Tier |
 | Boot disk | 10 GB `pd-standard` | Up to 30 GB-month across the billing account |
 | OS | Ubuntu 24.04 LTS | The selected standard image has no premium OS license charge |
-| External IPv4 | Ephemeral, Standard Tier | Separately priced; only one hour/month is currently free |
+| External IPv4 | Ephemeral, Standard Tier | A monthly account-wide zero-price address-hour tier applies before excess usage is billed |
 | Outbound traffic | Application-dependent | Quotas and destination exclusions apply |
 
 The CLI cannot see your billing-account-wide usage, discounts, taxes, existing

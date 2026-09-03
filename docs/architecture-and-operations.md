@@ -194,12 +194,15 @@ A small machine type, standard persistent disk, and ephemeral address do not
 guarantee a zero-dollar deployment. The Compute Engine Free Tier allowance is
 shared across the billing account and applies only to eligible usage.
 
-The external IPv4 address is priced separately. As last checked on
-**2026-09-03**, Google listed an attached static or ephemeral external IPv4 at
-**$0.005/hour**, with only **one free hour per billing account per month**. A
-continuously allocated address is therefore about **$3.60 for 30 days** or
-**$3.72 for 31 days**, before taxes and other usage. These are estimates, not a
-quote. See [Cost and Google Cloud Free Tier limits](costs.md) and verify the live
+The external IPv4 address has its own account-wide pricing tier. As last checked
+on **2026-09-03**, Google listed the paid tier for an attached static or
+ephemeral external IPv4 at **$0.005/hour**, while the Billing Pricing API exposed
+a monthly zero-price tier first. Its 720- or 744-address-hour threshold often
+covers most or all of one continuously attached address; a 31-day month with a
+720-hour threshold leaves only the final 24 hours in the paid tier. Overlapping
+addresses or other account-wide usage can push more hours into that tier. See
+[Cost and Google Cloud Free Tier limits](costs.md) and verify both the account's
+Billing Report and the live
 [Google Cloud VPC pricing](https://cloud.google.com/vpc/network-pricing) before a
 long-running deployment.
 
