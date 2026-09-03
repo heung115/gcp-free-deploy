@@ -17,7 +17,7 @@ bin/
 *.test
 *.out
 
-# Go module cache (보통은 커밋 X)
+# Go module cache (normally not committed)
 vendor/
 
 # Terraform
@@ -28,23 +28,25 @@ crash.log
 crash.*.log
 .gcp-free-deploy.tfplan
 .gcp-free-deploy-destroy.tfplan
+.gcp-free-deploy.lock
 *.tfplan
 
-# Terraform 변수 파일 (민감 정보 가능)
+# Terraform variable files (may contain sensitive values)
 terraform.tfvars
 *.tfvars
 *.tfvars.json
 .gcp-free-deploy.tfvars.json
+.gcp-free-deploy.tfvars.json.tmp-*
 
-# 로컬 배포 설정 파일 (개인/환경별 값)
+# Local deployment config (personal/environment-specific values)
 gcp-free-deploy.json
 
-# GCP 인증 키
+# GCP credential files
 credentials.json
 service-account*.json
 *-credentials.json
 
-# 환경·인증서·터널 credential
+# Environment, certificate, and tunnel credentials
 .env
 .env.*
 !.env.example
@@ -52,5 +54,5 @@ service-account*.json
 *.key
 .cloudflared/
 
-# 기타 로그
+# Other logs
 *.log

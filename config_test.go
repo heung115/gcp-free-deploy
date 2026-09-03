@@ -19,7 +19,7 @@ func TestDeployConfigValidation(t *testing.T) {
 				ProjectID:           "123456789",
 				Zone:                "us-central1-a",
 				Source:              "docker",
-				DockerImage:         "nginx:1.27.4",
+				DockerImage:         "nginx:1.30.4",
 				ContainerPort:       80,
 				AllowedSourceRanges: []string{"203.0.113.10/32"},
 			},
@@ -31,7 +31,7 @@ func TestDeployConfigValidation(t *testing.T) {
 				ProjectID:           "demo-project-123",
 				Zone:                "us-central1-a;reboot",
 				Source:              "docker",
-				DockerImage:         "nginx:1.27.4",
+				DockerImage:         "nginx:1.30.4",
 				ContainerPort:       80,
 				AllowedSourceRanges: []string{"203.0.113.10/32"},
 			},
@@ -43,7 +43,7 @@ func TestDeployConfigValidation(t *testing.T) {
 				ProjectID:           "demo-project-123",
 				Zone:                "us-central1-a",
 				Source:              "docker",
-				DockerImage:         "nginx:1.27.4",
+				DockerImage:         "nginx:1.30.4",
 				ContainerPort:       65536,
 				AllowedSourceRanges: []string{"203.0.113.10/32"},
 			},
@@ -91,8 +91,20 @@ func TestDeployConfigValidation(t *testing.T) {
 				ProjectID:     "demo-project-123",
 				Zone:          "us-central1-a",
 				Source:        "docker",
-				DockerImage:   "nginx:1.27.4",
+				DockerImage:   "nginx:1.30.4",
 				ContainerPort: 80,
+			},
+		},
+		{
+			name:      "IPv4-mapped IPv6 source range",
+			wantField: "allowed_source_ranges",
+			cfg: DeployConfig{
+				ProjectID:           "demo-project-123",
+				Zone:                "us-central1-a",
+				Source:              "docker",
+				DockerImage:         "nginx:1.30.4",
+				ContainerPort:       80,
+				AllowedSourceRanges: []string{"::ffff:203.0.113.1/128"},
 			},
 		},
 	}
@@ -146,7 +158,7 @@ func TestLoadDeployConfigRejectsUnknownFields(t *testing.T) {
 		"project_id":"demo-project-123",
 		"zone":"us-central1-a",
 		"source":"docker",
-		"docker_image":"nginx:1.27.4",
+		"docker_image":"nginx:1.30.4",
 		"container_port":80,
 		"allowed_source_ranges":["203.0.113.10/32"],
 		"unexpected":true
@@ -166,7 +178,7 @@ func TestDeployConfigFallbackZonesStayInOneRegion(t *testing.T) {
 		Zone:                "us-central1-a",
 		FallbackZones:       []string{"us-east1-b"},
 		Source:              "docker",
-		DockerImage:         "nginx:1.27.4",
+		DockerImage:         "nginx:1.30.4",
 		ContainerPort:       80,
 		AllowedSourceRanges: []string{"203.0.113.10/32"},
 	}
@@ -179,5 +191,27 @@ func TestExposesHTTPToEveryoneRecognizesNonCanonicalSlashZero(t *testing.T) {
 	cfg := DeployConfig{AllowedSourceRanges: []string{"203.0.113.10/0"}}
 	if !cfg.exposesHTTPToEveryone() {
 		t.Fatal("exposesHTTPToEveryone() missed an IPv4 /0 range")
+	}
+}
+
+func TestExposesHTTPToEveryoneRecognizesCombinedCoverage(t *testing.T) {
+	cfg := DeployConfig{AllowedSourceRanges: []string{"128.0.0.0/1", "0.0.0.0/1"}}
+	if !cfg.exposesHTTPToEveryone() {
+		t.Fatal("exposesHTTPToEveryone() missed combined full IPv4 coverage")
+	}
+}
+
+func TestExposesHTTPToEveryoneRejectsCoverageWithGap(t *testing.T) {
+	cfg := DeployConfig{AllowedSourceRanges: []string{"0.0.0.0/2", "128.0.0.0/1"}}
+	if cfg.exposesHTTPToEveryone() {
+		t.Fatal("exposesHTTPToEveryone() reported partial IPv4 coverage as public")
+	}
+}
+
+func TestNormalizeCanonicalizesGitHubHost(t *testing.T) {
+	cfg := DeployConfig{GithubRepo: "HTTPS://GitHub.COM/example/demo.git"}
+	cfg.Normalize()
+	if got, want := cfg.GithubRepo, "https://github.com/example/demo.git"; got != want {
+		t.Fatalf("GithubRepo = %q, want %q", got, want)
 	}
 }

@@ -10,80 +10,80 @@ terraform {
 }
 
 variable "project_id" {
-  description = "배포 대상 GCP project ID"
+  description = "GCP project ID to deploy into"
   type        = string
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", var.project_id))
-    error_message = "project_id는 6~30자의 소문자, 숫자, 하이픈 형식이어야 합니다."
+    error_message = "project_id must be 6-30 characters, start with a lowercase letter, end with a lowercase letter or digit, and contain only lowercase letters, digits, and hyphens."
   }
 }
 
 variable "region" {
-  description = "subnet을 생성할 GCP region"
+  description = "GCP region where the subnet will be created"
   type        = string
 
   validation {
     condition     = can(regex("^[a-z]+(?:-[a-z]+)*[0-9]+$", var.region))
-    error_message = "region 형식이 올바르지 않습니다."
+    error_message = "region has an invalid format."
   }
 }
 
 variable "zone" {
-  description = "VM을 생성할 GCP zone"
+  description = "GCP zone where the VM will be created"
   type        = string
 
   validation {
     condition     = can(regex("^[a-z]+(?:-[a-z]+)*[0-9]+-[a-z]$", var.zone))
-    error_message = "zone 형식이 올바르지 않습니다."
+    error_message = "zone has an invalid format."
   }
 }
 
 variable "deployment_source" {
-  description = "docker 또는 github"
+  description = "Deployment source: docker or github"
   type        = string
 
   validation {
     condition     = contains(["docker", "github"], var.deployment_source)
-    error_message = "deployment_source는 docker 또는 github여야 합니다."
+    error_message = "deployment_source must be docker or github."
   }
 }
 
 variable "docker_image" {
-  description = "배포할 공개 Docker 이미지. github 배포에서는 빈 문자열"
+  description = "Public Docker image to deploy; empty for github deployments"
   type        = string
   default     = ""
 
   validation {
     condition     = var.docker_image == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9._/:@-]+$", var.docker_image))
-    error_message = "docker_image 형식이 올바르지 않습니다."
+    error_message = "docker_image has an invalid format."
   }
 }
 
 variable "github_repo" {
-  description = "Dockerfile이 있는 공개 GitHub HTTPS URL. docker 배포에서는 빈 문자열"
+  description = "Public GitHub HTTPS URL containing a Dockerfile; empty for docker deployments"
   type        = string
   default     = ""
 
   validation {
     condition     = var.github_repo == "" || can(regex("^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?$", var.github_repo))
-    error_message = "github_repo는 https://github.com/<owner>/<repo>[.git] 형식이어야 합니다."
+    error_message = "github_repo must match https://github.com/<owner>/<repo>[.git]."
   }
 }
 
 variable "container_port" {
-  description = "컨테이너 애플리케이션이 수신하는 포트"
+  description = "Port on which the containerized application listens"
   type        = number
   default     = 80
 
   validation {
     condition     = var.container_port >= 1 && var.container_port <= 65535 && floor(var.container_port) == var.container_port
-    error_message = "container_port는 1~65535 범위의 정수여야 합니다."
+    error_message = "container_port must be an integer between 1 and 65535."
   }
 }
 
 variable "allowed_source_ranges" {
-  description = "데모 HTTP 포트에 접근할 수 있는 IPv4 CIDR 목록"
+  description = "IPv4 CIDR ranges allowed to access the demo HTTP port"
   type        = list(string)
   default     = ["127.0.0.1/32"]
 
@@ -95,24 +95,24 @@ variable "allowed_source_ranges" {
         can(cidrnetmask(source_range)) && !strcontains(source_range, ":")
       ])
     )
-    error_message = "allowed_source_ranges에는 IPv4 CIDR을 하나 이상 지정해야 합니다."
+    error_message = "allowed_source_ranges must contain at least one IPv4 CIDR."
   }
 }
 
 variable "machine_type" {
-  description = "데모 VM machine type"
+  description = "Machine type for the demo VM"
   type        = string
   default     = "e2-micro"
 }
 
 variable "disk_size_gb" {
-  description = "부팅 디스크 크기(GB)"
+  description = "Boot disk size in GB"
   type        = number
   default     = 10
 
   validation {
     condition     = var.disk_size_gb >= 10 && var.disk_size_gb <= 30 && floor(var.disk_size_gb) == var.disk_size_gb
-    error_message = "disk_size_gb는 10~30 범위의 정수여야 합니다."
+    error_message = "disk_size_gb must be an integer between 10 and 30."
   }
 }
 
@@ -154,7 +154,7 @@ resource "google_compute_firewall" "http" {
   target_tags   = [local.http_tag]
 }
 
-# IAP TCP forwarding의 고정 주소 범위만 SSH를 허용한다. 인터넷 전체에 22번을 열지 않는다.
+# Allow SSH only from the fixed IAP TCP forwarding range; do not expose port 22 to the entire internet.
 resource "google_compute_firewall" "iap_ssh" {
   name      = "gcp-free-deploy-allow-iap-ssh"
   network   = google_compute_network.demo.id
@@ -185,7 +185,7 @@ resource "google_compute_instance" "demo" {
     auto_delete = true
 
     initialize_params {
-      image = "ubuntu-os-cloud/ubuntu-2204-lts"
+      image = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
       size  = var.disk_size_gb
       type  = "pd-standard"
     }
@@ -194,7 +194,7 @@ resource "google_compute_instance" "demo" {
   network_interface {
     subnetwork = google_compute_subnetwork.demo.id
 
-    # 데모 HTTP 접근을 위한 임시 외부 IPv4다. 정적 IP는 생성하지 않는다.
+    # Use an ephemeral external IPv4 address for demo HTTP access; do not create a static IP.
     access_config {
       network_tier = "STANDARD"
     }
@@ -205,8 +205,8 @@ resource "google_compute_instance" "demo" {
     block-project-ssh-keys = "TRUE"
   }
 
-  # 이 앱은 Google Cloud API를 호출하지 않는다. 잠근 provider 7.12.0에서
-  # scopes=[]는 service account와 OAuth scope를 연결하지 않는 명시적 설정이다.
+  # This app does not call Google Cloud APIs. With pinned provider 7.12.0,
+  # scopes = [] explicitly configures no service account and no OAuth scopes.
   # https://github.com/hashicorp/terraform-provider-google/blob/v7.12.0/google/services/compute/resource_compute_instance.go
   service_account {
     scopes = []
@@ -226,10 +226,24 @@ resource "google_compute_instance" "demo" {
     readonly DOCKER_IMAGE='${var.docker_image}'
     readonly GITHUB_REPO='${var.github_repo}'
     readonly CONTAINER_PORT='${var.container_port}'
+    readonly STATE_DIR=/var/lib/gcp-free-deploy
+    readonly COMPLETED_MARKER="$STATE_DIR/startup-complete"
     CURRENT_STEP=bootstrap
 
     log() {
       logger -t gcp-free-deploy -- "$1"
+    }
+
+    apt_retry() {
+      local attempt
+      for attempt in $(seq 1 5); do
+        if "$@"; then
+          return 0
+        fi
+        log "APT_RETRY step=$CURRENT_STEP attempt=$attempt"
+        sleep 5
+      done
+      return 1
     }
 
     on_error() {
@@ -239,46 +253,61 @@ resource "google_compute_instance" "demo" {
     }
     trap 'on_error $LINENO' ERR
 
-    log "STARTUP_BEGIN source=$DEPLOYMENT_SOURCE"
+    install -d -m 0755 "$STATE_DIR"
 
-    CURRENT_STEP=install_docker
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y
-    apt-get install -y --no-install-recommends ca-certificates curl docker.io git
-    systemctl enable --now docker
-
-    docker rm -f web >/dev/null 2>&1 || true
-
-    if [[ "$DEPLOYMENT_SOURCE" == "docker" ]]; then
-      CURRENT_STEP=docker_pull
-      if ! docker pull "$DOCKER_IMAGE"; then
-        log "FAILURE_DOCKER_PULL"
+    if [[ -f "$COMPLETED_MARKER" ]]; then
+      log "STARTUP_BEGIN source=$DEPLOYMENT_SOURCE mode=restart"
+      CURRENT_STEP=restart_existing
+      systemctl enable --now docker
+      if ! docker start web >/dev/null; then
+        rm -f "$COMPLETED_MARKER"
+        log "FAILURE_DOCKER_RUN reason=restart_existing"
         exit 1
       fi
-      APP_IMAGE="$DOCKER_IMAGE"
     else
-      CURRENT_STEP=git_clone
-      install -d -m 0755 /opt/gcp-free-deploy
-      rm -rf /opt/gcp-free-deploy/repo
-      git clone --depth 1 -- "$GITHUB_REPO" /opt/gcp-free-deploy/repo
+      log "STARTUP_BEGIN source=$DEPLOYMENT_SOURCE mode=provision"
+      export DEBIAN_FRONTEND=noninteractive
+      CURRENT_STEP=apt_update
+      apt_retry apt-get -o Acquire::Retries=3 update -y
+      CURRENT_STEP=install_docker
+      apt_retry apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 install -y --no-install-recommends ca-certificates curl docker.io git
+      systemctl enable --now docker
 
-      if [[ ! -f /opt/gcp-free-deploy/repo/Dockerfile ]]; then
-        log "FAILURE_DOCKER_BUILD reason=no_dockerfile"
-        exit 1
+      # A failed first boot leaves no completion marker. Clean up its partial
+      # application state so the next boot can retry provisioning from scratch.
+      docker rm -f web >/dev/null 2>&1 || true
+
+      if [[ "$DEPLOYMENT_SOURCE" == "docker" ]]; then
+        CURRENT_STEP=docker_pull
+        if ! docker pull "$DOCKER_IMAGE"; then
+          log "FAILURE_DOCKER_PULL"
+          exit 1
+        fi
+        APP_IMAGE="$DOCKER_IMAGE"
+      else
+        CURRENT_STEP=git_clone
+        install -d -m 0755 /opt/gcp-free-deploy
+        rm -rf /opt/gcp-free-deploy/repo
+        git clone --depth 1 -- "$GITHUB_REPO" /opt/gcp-free-deploy/repo
+
+        if [[ ! -f /opt/gcp-free-deploy/repo/Dockerfile ]]; then
+          log "FAILURE_DOCKER_BUILD reason=no_dockerfile"
+          exit 1
+        fi
+
+        CURRENT_STEP=docker_build
+        if ! docker build --tag gcp-free-deploy-app:local /opt/gcp-free-deploy/repo; then
+          log "FAILURE_DOCKER_BUILD"
+          exit 1
+        fi
+        APP_IMAGE=gcp-free-deploy-app:local
       fi
 
-      CURRENT_STEP=docker_build
-      if ! docker build --tag gcp-free-deploy-app:local /opt/gcp-free-deploy/repo; then
-        log "FAILURE_DOCKER_BUILD"
+      CURRENT_STEP=docker_run
+      if ! docker run --detach --name web --restart unless-stopped --publish "80:$CONTAINER_PORT" "$APP_IMAGE"; then
+        log "FAILURE_DOCKER_RUN"
         exit 1
       fi
-      APP_IMAGE=gcp-free-deploy-app:local
-    fi
-
-    CURRENT_STEP=docker_run
-    if ! docker run --detach --name web --restart unless-stopped --publish "80:$CONTAINER_PORT" "$APP_IMAGE"; then
-      log "FAILURE_DOCKER_RUN"
-      exit 1
     fi
 
     if [[ "$(docker inspect --format '{{.State.Running}}' web 2>/dev/null || true)" != "true" ]]; then
@@ -290,6 +319,8 @@ resource "google_compute_instance" "demo" {
     for attempt in $(seq 1 30); do
       if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:80/ >/dev/null; then
         log "HTTP_HEALTH_OK attempt=$attempt"
+        CURRENT_STEP=mark_complete
+        touch "$COMPLETED_MARKER"
         log "STARTUP_DONE"
         exit 0
       fi

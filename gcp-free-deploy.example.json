@@ -6,7 +6,7 @@
     "us-central1-c"
   ],
   "source": "docker",
-  "docker_image": "nginx:1.27.4",
+  "docker_image": "nginx:1.30.4",
   "container_port": 80,
   "allowed_source_ranges": [
     "203.0.113.10/32"

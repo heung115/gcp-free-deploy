@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +13,10 @@ import (
 	"strings"
 )
 
-const maxDiagnosticBytes = 8192
+const (
+	maxDiagnosticBytes    = 8192
+	maxCommandOutputBytes = 1 << 20
+)
 
 const terraformVariablesName = ".gcp-free-deploy.tfvars.json"
 
@@ -57,22 +59,19 @@ func writeTerraformVariables(dir string, cfg DeployConfig) (string, error) {
 	}
 	data, err := json.MarshalIndent(values, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("Terraform 변수 직렬화: %w", err)
+		return "", fmt.Errorf("marshal Terraform variables: %w", err)
 	}
 	data = append(data, '\n')
 	path := filepath.Join(dir, terraformVariablesName)
 	if info, statErr := os.Lstat(path); statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return "", fmt.Errorf("Terraform 변수 파일 경로가 안전한 일반 파일이 아닙니다")
+			return "", fmt.Errorf("Terraform variables file path is not a safe regular file")
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return "", fmt.Errorf("Terraform 변수 파일 확인: %w", statErr)
+		return "", fmt.Errorf("inspect Terraform variables file: %w", statErr)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", fmt.Errorf("Terraform 변수 파일 쓰기: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return "", fmt.Errorf("Terraform 변수 파일 권한 설정: %w", err)
+	if err := writeFileSafely(path, data, 0o600); err != nil {
+		return "", fmt.Errorf("write Terraform variables file: %w", err)
 	}
 	return path, nil
 }
@@ -80,18 +79,18 @@ func writeTerraformVariables(dir string, cfg DeployConfig) (string, error) {
 func readTerraformVariables(path string) (terraformVariables, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return terraformVariables{}, fmt.Errorf("Terraform 변수 파일 확인: %w", err)
+		return terraformVariables{}, fmt.Errorf("inspect Terraform variables file: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return terraformVariables{}, fmt.Errorf("Terraform 변수 파일 경로가 안전한 일반 파일이 아닙니다")
+		return terraformVariables{}, fmt.Errorf("Terraform variables file path is not a safe regular file")
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return terraformVariables{}, fmt.Errorf("Terraform 변수 파일 권한은 0600이어야 합니다")
+	if !terraformVariablesModePassesValidation(info.Mode()) {
+		return terraformVariables{}, fmt.Errorf("Terraform variables file must not grant group or other access")
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
-		return terraformVariables{}, fmt.Errorf("Terraform 변수 파일 열기: %w", err)
+		return terraformVariables{}, fmt.Errorf("open Terraform variables file: %w", err)
 	}
 	defer file.Close()
 
@@ -99,11 +98,11 @@ func readTerraformVariables(path string) (terraformVariables, error) {
 	decoder.DisallowUnknownFields()
 	var values terraformVariables
 	if err := decoder.Decode(&values); err != nil {
-		return terraformVariables{}, fmt.Errorf("Terraform 변수 파일 파싱: %w", err)
+		return terraformVariables{}, fmt.Errorf("parse Terraform variables file: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return terraformVariables{}, fmt.Errorf("Terraform 변수 파일에는 JSON 객체 하나만 있어야 합니다")
+		return terraformVariables{}, fmt.Errorf("Terraform variables file must contain exactly one JSON object")
 	}
 	return values, nil
 }
@@ -126,17 +125,57 @@ type CommandResult struct {
 // Runner is the boundary around Terraform and gcloud processes.
 type Runner interface {
 	Run(context.Context, Command) CommandResult
+	LookPath(string) error
 }
 
 type ExecRunner struct{}
+
+type boundedTailBuffer struct {
+	data      []byte
+	truncated bool
+}
+
+func (b *boundedTailBuffer) Write(p []byte) (int, error) {
+	written := len(p)
+	if written == 0 {
+		return 0, nil
+	}
+	if written >= maxCommandOutputBytes {
+		b.truncated = b.truncated || len(b.data) > 0 || written > maxCommandOutputBytes
+		b.data = append(b.data[:0], p[written-maxCommandOutputBytes:]...)
+		return written, nil
+	}
+
+	keepExisting := maxCommandOutputBytes - written
+	if len(b.data) > keepExisting {
+		drop := len(b.data) - keepExisting
+		copy(b.data, b.data[drop:])
+		b.data = b.data[:keepExisting]
+		b.truncated = true
+	}
+	b.data = append(b.data, p...)
+	return written, nil
+}
+
+func (b *boundedTailBuffer) String() string {
+	if !b.truncated {
+		return string(b.data)
+	}
+	return fmt.Sprintf("[output truncated; showing the last %d bytes]\n%s", maxCommandOutputBytes, b.data)
+}
+
+func (r ExecRunner) LookPath(name string) error {
+	_, err := exec.LookPath(name)
+	return err
+}
 
 func (r ExecRunner) Run(ctx context.Context, command Command) CommandResult {
 	cmd := exec.CommandContext(ctx, command.Name, command.Args...)
 	cmd.Dir = command.Dir
 	cmd.Stdin = command.Stdin
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+	var stdout boundedTailBuffer
+	var stderr boundedTailBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -186,7 +225,7 @@ type DeploymentError struct {
 
 func runTerraformApply(ctx context.Context, runner Runner, dir, planPath string, approved bool) error {
 	if !approved {
-		return &DeploymentError{Kind: FailureConfirmationRequired, Operation: "terraform apply", Diagnostics: "사용자 확인이 필요합니다"}
+		return &DeploymentError{Kind: FailureConfirmationRequired, Operation: "terraform apply", Diagnostics: "user confirmation is required"}
 	}
 	result := runner.Run(ctx, Command{
 		Name: "terraform",
@@ -202,7 +241,7 @@ func runTerraformApply(ctx context.Context, runner Runner, dir, planPath string,
 
 func runTerraformDestroyApply(ctx context.Context, runner Runner, dir, planPath string, approved bool) error {
 	if !approved {
-		return &DeploymentError{Kind: FailureConfirmationRequired, Operation: "terraform destroy", Diagnostics: "사용자 확인이 필요합니다"}
+		return &DeploymentError{Kind: FailureConfirmationRequired, Operation: "terraform destroy", Diagnostics: "user confirmation is required"}
 	}
 	result := runner.Run(ctx, Command{
 		Name: "terraform",
@@ -234,9 +273,9 @@ func classifyTerraformFailure(raw string) FailureKind {
 
 func (e *DeploymentError) Error() string {
 	if e.Diagnostics == "" {
-		return fmt.Sprintf("%s 실패 (%s)", e.Operation, e.Kind)
+		return fmt.Sprintf("%s failed (%s)", e.Operation, e.Kind)
 	}
-	return fmt.Sprintf("%s 실패 (%s): %s", e.Operation, e.Kind, e.Diagnostics)
+	return fmt.Sprintf("%s failed (%s): %s", e.Operation, e.Kind, e.Diagnostics)
 }
 
 func runTerraformPreflight(ctx context.Context, runner Runner, dir string) error {
@@ -246,7 +285,7 @@ func runTerraformPreflight(ctx context.Context, runner Runner, dir string) error
 		op   string
 	}{
 		{args: []string{"fmt", "-check", "-diff", "main.tf"}, kind: FailureTerraformFmt, op: "terraform fmt"},
-		{args: []string{"init", "-backend=false", "-lockfile=readonly", "-input=false"}, kind: FailureTerraformInit, op: "terraform init"},
+		{args: []string{"init", "-reconfigure", "-lockfile=readonly", "-input=false"}, kind: FailureTerraformInit, op: "terraform init"},
 		{args: []string{"validate", "-no-color"}, kind: FailureTerraformValidate, op: "terraform validate"},
 	}
 	for _, step := range steps {

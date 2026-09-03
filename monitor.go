@@ -34,10 +34,10 @@ type TerraformOutputs struct {
 func parseTerraformOutputs(data []byte) (TerraformOutputs, error) {
 	var outputs TerraformOutputs
 	if err := json.Unmarshal(data, &outputs); err != nil {
-		return TerraformOutputs{}, &DeploymentError{Kind: FailureTerraformOutput, Operation: "terraform output", Diagnostics: "JSON 출력 형식이 올바르지 않습니다"}
+		return TerraformOutputs{}, &DeploymentError{Kind: FailureTerraformOutput, Operation: "terraform output", Diagnostics: "invalid JSON output format"}
 	}
 	if outputs.ProjectID.Value == "" || outputs.Region.Value == "" || outputs.VMName.Value == "" || outputs.VMZone.Value == "" || outputs.WebsiteURL.Value == "" {
-		return TerraformOutputs{}, &DeploymentError{Kind: FailureTerraformOutput, Operation: "terraform output", Diagnostics: "필수 output이 비어 있습니다"}
+		return TerraformOutputs{}, &DeploymentError{Kind: FailureTerraformOutput, Operation: "terraform output", Diagnostics: "required output values are empty"}
 	}
 	return outputs, nil
 }
@@ -51,20 +51,22 @@ func readTerraformOutputs(ctx context.Context, runner Runner, dir string) (Terra
 }
 
 type DeploymentMonitor struct {
-	runner         Runner
-	out            io.Writer
-	startupTimeout time.Duration
-	pollInterval   time.Duration
-	healthChecks   int
+	runner            Runner
+	out               io.Writer
+	startupTimeout    time.Duration
+	finalCheckTimeout time.Duration
+	pollInterval      time.Duration
+	healthChecks      int
 }
 
 func NewDeploymentMonitor(runner Runner, out io.Writer) *DeploymentMonitor {
 	return &DeploymentMonitor{
-		runner:         runner,
-		out:            out,
-		startupTimeout: defaultStartupTimeout,
-		pollInterval:   4 * time.Second,
-		healthChecks:   12,
+		runner:            runner,
+		out:               out,
+		startupTimeout:    defaultStartupTimeout,
+		finalCheckTimeout: diagnosticTimeout,
+		pollInterval:      4 * time.Second,
+		healthChecks:      12,
 	}
 }
 
@@ -74,16 +76,25 @@ func (m *DeploymentMonitor) Wait(ctx context.Context, outputs TerraformOutputs) 
 
 	startedAt := time.Now()
 	sshConnected := false
+	initialHealthTimedOut := false
 	for poll := 1; ; poll++ {
 		result := m.runRemote(monitorCtx, outputs, statusCommand())
 		combined := result.Stdout + "\n" + result.Stderr
 		if result.ExitCode == 0 {
 			sshConnected = true
 			if runtimeReady(combined) {
-				return m.waitForPublicHealth(ctx, outputs.WebsiteURL.Value)
+				err := m.waitForPublicHealth(monitorCtx, outputs.WebsiteURL.Value)
+				if err == nil {
+					return nil
+				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					initialHealthTimedOut = true
+					break
+				}
+				return err
 			}
 			if failure := classifyRuntimeFailure(combined); failure != "" {
-				return &DeploymentError{Kind: failure, Operation: "VM startup 검증", Diagnostics: m.collectDiagnosticsWithTimeout(ctx, outputs)}
+				return &DeploymentError{Kind: failure, Operation: "VM startup verification", Diagnostics: m.collectDiagnosticsWithTimeout(ctx, outputs)}
 			}
 		}
 
@@ -91,7 +102,7 @@ func (m *DeploymentMonitor) Wait(ctx context.Context, outputs TerraformOutputs) 
 			break
 		}
 		elapsed := time.Since(startedAt).Round(time.Second)
-		fmt.Fprintf(m.out, "startup 상태 대기 중 (확인 %d회, 경과 %s / 제한 %s)\n", poll, elapsed, m.startupTimeout)
+		fmt.Fprintf(m.out, "Waiting for startup status (check %d, elapsed %s / timeout %s)\n", poll, elapsed, m.startupTimeout)
 		if err := waitContext(monitorCtx, m.pollInterval); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				break
@@ -104,34 +115,60 @@ func (m *DeploymentMonitor) Wait(ctx context.Context, outputs TerraformOutputs) 
 		return ctx.Err()
 	}
 
-	// 제한 시각과 startup 완료가 거의 동시에 발생할 수 있으므로 별도 짧은
-	// context에서 상태를 마지막으로 한 번 확인한 뒤 실패로 판정한다.
-	finalCtx, finalCancel := context.WithTimeout(ctx, diagnosticTimeout)
+	// The timeout and startup completion can occur almost simultaneously, so check
+	// the status one final time in a separate short-lived context before failing.
+	finalCtx, finalCancel := context.WithTimeout(ctx, m.finalCheckTimeout)
 	finalResult := m.runRemote(finalCtx, outputs, statusCommand())
-	finalCancel()
+	defer finalCancel()
 	finalCombined := finalResult.Stdout + "\n" + finalResult.Stderr
 	if finalResult.ExitCode == 0 {
 		sshConnected = true
 		if runtimeReady(finalCombined) {
-			return m.waitForPublicHealth(ctx, outputs.WebsiteURL.Value)
+			err := m.waitForPublicHealth(finalCtx, outputs.WebsiteURL.Value)
+			if err == nil {
+				return nil
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				return finalHealthTimeoutError()
+			}
+			return err
 		}
 		if failure := classifyRuntimeFailure(finalCombined); failure != "" {
-			return &DeploymentError{Kind: failure, Operation: "VM startup 검증", Diagnostics: m.collectDiagnosticsWithTimeout(ctx, outputs)}
+			return &DeploymentError{Kind: failure, Operation: "VM startup verification", Diagnostics: m.collectDiagnosticsWithTimeout(ctx, outputs)}
+		}
+	}
+	if err := finalCtx.Err(); err != nil {
+		if parentErr := ctx.Err(); parentErr != nil {
+			return parentErr
+		}
+		if initialHealthTimedOut && errors.Is(err, context.DeadlineExceeded) {
+			return finalHealthTimeoutError()
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
 	}
 
 	kind := FailureVMStartup
-	operation := "VM startup 검증"
+	operation := "VM startup verification"
 	if !sshConnected {
 		kind = FailureSSH
-		operation = "IAP SSH 연결"
+		operation = "IAP SSH connection"
 	}
 	diagnostics := m.collectDiagnosticsWithTimeout(ctx, outputs)
-	timeoutMessage := fmt.Sprintf("startup 제한 %s를 초과했습니다", m.startupTimeout)
+	timeoutMessage := fmt.Sprintf("startup timed out after %s", m.startupTimeout)
 	if diagnostics != "" {
 		timeoutMessage += "\n" + diagnostics
 	}
 	return &DeploymentError{Kind: kind, Operation: operation, Diagnostics: timeoutMessage}
+}
+
+func finalHealthTimeoutError() error {
+	return &DeploymentError{
+		Kind:        FailureHealthCheck,
+		Operation:   "external HTTP health check",
+		Diagnostics: "the startup deadline and final external health-check grace period both expired",
+	}
 }
 
 func runtimeReady(raw string) bool {
@@ -155,14 +192,14 @@ func (m *DeploymentMonitor) runRemote(ctx context.Context, outputs TerraformOutp
 }
 
 func statusCommand() string {
-	return "sudo journalctl -t gcp-free-deploy -n 80 --no-pager; " +
+	return "sudo journalctl -b -t gcp-free-deploy -n 80 --no-pager; " +
 		"if sudo docker inspect --format='CONTAINER_{{if .State.Running}}RUNNING{{else}}STOPPED{{end}}' web 2>/dev/null; then true; else echo CONTAINER_MISSING; fi; " +
 		"if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:80/ >/dev/null; then echo HTTP_HEALTH_OK; else echo HTTP_HEALTH_FAILED; fi"
 }
 
 func diagnosticsCommand() string {
 	return "echo '[startup service]'; sudo systemctl status google-startup-scripts.service --no-pager --lines=40 || true; " +
-		"echo '[startup log]'; sudo journalctl -t gcp-free-deploy -n 160 --no-pager || true; " +
+		"echo '[startup log]'; sudo journalctl -b -t gcp-free-deploy -n 160 --no-pager || true; " +
 		"echo '[containers]'; sudo docker ps -a --no-trunc || true; " +
 		"echo '[container log]'; sudo docker logs --tail 120 web 2>&1 || true; " +
 		"echo '[health]'; curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:80/ >/dev/null && echo HTTP_HEALTH_OK || echo HTTP_HEALTH_FAILED"
@@ -188,13 +225,16 @@ func (m *DeploymentMonitor) waitForPublicHealth(ctx context.Context, websiteURL 
 		if result.ExitCode == 0 {
 			return nil
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if attempt < m.healthChecks {
 			if err := waitContext(ctx, m.pollInterval); err != nil {
 				return err
 			}
 		}
 	}
-	return &DeploymentError{Kind: FailureHealthCheck, Operation: "외부 HTTP health check", Diagnostics: "VM 내부 검증은 통과했지만 외부 HTTP 요청이 실패했습니다"}
+	return &DeploymentError{Kind: FailureHealthCheck, Operation: "external HTTP health check", Diagnostics: "the in-VM check passed, but the external HTTP request failed"}
 }
 
 func classifyRuntimeFailure(raw string) FailureKind {
