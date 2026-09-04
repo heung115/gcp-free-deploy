@@ -1,3 +1,3 @@
-module gcp-free-deploy
+module github.com/heung115/gcp-free-deploy
 
-go 1.24.1
+go 1.26.8

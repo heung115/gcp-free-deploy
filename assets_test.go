@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,23 @@ func TestEnsureRuntimeAssetsPreservesExistingTerraform(t *testing.T) {
 	}
 }
 
+func TestCreateRuntimeAssetNeverOverwritesAnExistingPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "main.tf")
+	if err := os.WriteFile(path, []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := createRuntimeAsset(path, []byte("replace\n"), 0o644); err == nil {
+		t.Fatal("createRuntimeAsset() overwrote an existing path")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "keep\n" {
+		t.Fatalf("existing file changed to %q", got)
+	}
+}
+
 func TestInitCommandPreparesAStandaloneDirectory(t *testing.T) {
 	dir := t.TempDir()
 	var out bytes.Buffer
@@ -65,5 +83,26 @@ func TestInitCommandPreparesAStandaloneDirectory(t *testing.T) {
 	}
 	if len(runner.commands) != 0 {
 		t.Fatalf("init ran external commands: %#v", runner.commands)
+	}
+}
+
+func TestInitRejectsModifiedManagedTerraformWithoutOverwritingIt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.tf")
+	const existing = "# custom Terraform must never be run implicitly\n"
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runCLI(context.Background(), []string{"init"}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}, &recordingRunner{}, dir)
+	if err == nil || !strings.Contains(err.Error(), "differs from this CLI release") {
+		t.Fatalf("runCLI(init) error = %v, want managed Terraform mismatch", err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != existing {
+		t.Fatalf("init overwrote the existing main.tf: %q", data)
 	}
 }

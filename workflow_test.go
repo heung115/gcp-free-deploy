@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -14,6 +16,14 @@ import (
 type recordingRunner struct {
 	commands []Command
 	results  []CommandResult
+	missing  map[string]bool
+}
+
+func (r *recordingRunner) LookPath(name string) error {
+	if r.missing[name] {
+		return errors.New("executable not found")
+	}
+	return nil
 }
 
 func (r *recordingRunner) Run(_ context.Context, command Command) CommandResult {
@@ -35,7 +45,7 @@ func TestTerraformPreflightRunsSafetyChecksInOrder(t *testing.T) {
 
 	want := []Command{
 		{Name: "terraform", Args: []string{"fmt", "-check", "-diff", "main.tf"}, Dir: "/work"},
-		{Name: "terraform", Args: []string{"init", "-backend=false", "-lockfile=readonly", "-input=false"}, Dir: "/work"},
+		{Name: "terraform", Args: []string{"init", "-reconfigure", "-lockfile=readonly", "-input=false"}, Dir: "/work"},
 		{Name: "terraform", Args: []string{"validate", "-no-color"}, Dir: "/work"},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
@@ -132,6 +142,27 @@ func TestSanitizeDiagnosticsMasksSecretsAndLimitsOutput(t *testing.T) {
 	}
 }
 
+func TestBoundedTailBufferRetainsOnlyTheNewestOutput(t *testing.T) {
+	var buffer boundedTailBuffer
+	prefix := strings.Repeat("a", maxCommandOutputBytes+17)
+	if written, err := buffer.Write([]byte(prefix)); err != nil || written != len(prefix) {
+		t.Fatalf("Write() = %d, %v; want %d, nil", written, err, len(prefix))
+	}
+	if written, err := buffer.Write([]byte("newest-output")); err != nil || written != len("newest-output") {
+		t.Fatalf("second Write() = %d, %v", written, err)
+	}
+	got := buffer.String()
+	if !strings.Contains(got, "[output truncated") {
+		t.Fatalf("bounded output omitted truncation marker: %q", got[:min(len(got), 80)])
+	}
+	if !strings.HasSuffix(got, "newest-output") {
+		t.Fatal("bounded output did not retain the newest bytes")
+	}
+	if len(buffer.data) != maxCommandOutputBytes {
+		t.Fatalf("retained %d bytes, want %d", len(buffer.data), maxCommandOutputBytes)
+	}
+}
+
 func TestTerraformPlanRedactsOutputBeforeDisplayingIt(t *testing.T) {
 	runner := &recordingRunner{results: []CommandResult{{
 		ExitCode: 2,
@@ -188,7 +219,7 @@ func TestWriteTerraformVariablesUsesJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
 	}
 	var values map[string]any
@@ -201,5 +232,109 @@ func TestWriteTerraformVariablesUsesJSON(t *testing.T) {
 	}
 	if values["deployment_source"] != "docker" || values["region"] != "us-central1" {
 		t.Fatalf("unexpected variables: %#v", values)
+	}
+	roundTrip, err := readTerraformVariables(path)
+	if err != nil {
+		t.Fatalf("readTerraformVariables() returned an error after writing: %v", err)
+	}
+	if roundTrip.ProjectID != cfg.ProjectID || roundTrip.Zone != cfg.Zone {
+		t.Fatalf("round-trip variables = %#v, want project %q and zone %q", roundTrip, cfg.ProjectID, cfg.Zone)
+	}
+}
+
+func TestTerraformVariablesModePassesValidationForOS(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		mode os.FileMode
+		want bool
+	}{
+		{name: "Windows ignores POSIX mode bits", goos: "windows", mode: 0o666, want: true},
+		{name: "private POSIX file", goos: "linux", mode: 0o600, want: true},
+		{name: "read-only private POSIX file", goos: "darwin", mode: 0o400, want: true},
+		{name: "group-readable POSIX file", goos: "linux", mode: 0o640, want: false},
+		{name: "world-readable POSIX file", goos: "darwin", mode: 0o604, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := terraformVariablesModePassesValidationForOS(tt.goos, tt.mode); got != tt.want {
+				t.Fatalf("terraformVariablesModePassesValidationForOS(%q, %04o) = %v, want %v", tt.goos, tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAtomicWriteRenameFailureDoesNotTruncateExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, terraformVariablesName)
+	original := []byte("original deployment variables\n")
+	replacement := []byte("incomplete replacement")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	renameErr := errors.New("injected rename failure")
+	err := writeFileSafelyWithRename(path, replacement, 0o600, func(oldPath, newPath string) error {
+		if filepath.Dir(oldPath) != dir {
+			t.Errorf("temporary file directory = %q, want %q", filepath.Dir(oldPath), dir)
+		}
+		if newPath != path {
+			t.Errorf("rename destination = %q, want %q", newPath, path)
+		}
+		temporaryData, readErr := os.ReadFile(oldPath)
+		if readErr != nil {
+			t.Errorf("read temporary file before rename: %v", readErr)
+		} else if !bytes.Equal(temporaryData, replacement) {
+			t.Errorf("temporary file content = %q, want %q", temporaryData, replacement)
+		}
+		return renameErr
+	})
+	if !errors.Is(err, renameErr) {
+		t.Fatalf("writeFileSafelyWithRename() error = %v, want wrapped %v", err, renameErr)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("existing file was changed after failed atomic write: got %q, want %q", got, original)
+	}
+
+	temporaryFiles, err := filepath.Glob(filepath.Join(dir, filepath.Base(path)+".tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temporaryFiles) != 0 {
+		t.Fatalf("temporary files remain after failed atomic write: %v", temporaryFiles)
+	}
+}
+
+func TestAtomicWriteReplacesExistingFileCompletely(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, terraformVariablesName)
+	if err := os.WriteFile(path, []byte("old content with a long trailing suffix\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []byte("new\n")
+	if err := writeFileSafely(path, want, 0o600); err != nil {
+		t.Fatalf("writeFileSafely() returned an error: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("destination content = %q, want %q", got, want)
+	}
+
+	temporaryFiles, err := filepath.Glob(filepath.Join(dir, filepath.Base(path)+".tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temporaryFiles) != 0 {
+		t.Fatalf("temporary files remain after successful atomic write: %v", temporaryFiles)
 	}
 }

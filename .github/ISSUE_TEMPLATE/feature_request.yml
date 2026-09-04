@@ -1,0 +1,55 @@
+name: Feature request
+description: Suggest a focused improvement to gcp-free-deploy
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the user problem before proposing an implementation. This project
+        intentionally stays focused on a small, disposable GCP deployment.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues for a similar request.
+          required: true
+        - label: This request does not include credentials, private state, or other sensitive values.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Who has this problem, and what are they unable to do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the smallest change that would solve the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Note any workaround or simpler approach you considered.
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: Cost, IAM, network, and state impact
+      description: Explain any effect on billing risk, permissions, public access, Terraform state, or cleanup.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples, mockups, or links that clarify the request.
