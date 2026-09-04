@@ -214,3 +214,7 @@ state를 임의로 migration하거나 삭제하지 않습니다.
 - [설계와 운영 판단](docs/architecture-and-operations.ko.md)
 - [기여 안내](CONTRIBUTING.md)
 - [보안 정책](SECURITY.md)
+
+## 라이선스
+
+[MIT License](LICENSE)로 배포됩니다.

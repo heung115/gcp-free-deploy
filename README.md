@@ -3,6 +3,7 @@
 [![CI](https://github.com/heung115/gcp-free-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/heung115/gcp-free-deploy/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/heung115/gcp-free-deploy)](https://github.com/heung115/gcp-free-deploy/releases/latest)
 [![Go version](https://img.shields.io/github/go-mod/go-version/heung115/gcp-free-deploy)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **gcp-free-deploy** is a safety-first Go CLI for deploying one Docker image or one
 public GitHub repository to a Google Cloud Platform (GCP) Compute Engine VM with
@@ -310,3 +311,7 @@ or destroy that legacy state.
 If something fails, check [Troubleshooting](docs/troubleshooting.md) first, then
 [open an issue](https://github.com/heung115/gcp-free-deploy/issues/new/choose)
 with the CLI version, operating system, failing step, and **redacted** output.
+
+## License
+
+Released under the [MIT License](LICENSE).
