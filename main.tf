@@ -116,6 +116,17 @@ variable "disk_size_gb" {
   }
 }
 
+variable "max_runtime_hours" {
+  description = "Stop the VM after this many hours per start; 0 disables the limit. Retained disks can still incur charges."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.max_runtime_hours >= 0 && var.max_runtime_hours <= 168 && floor(var.max_runtime_hours) == var.max_runtime_hours
+    error_message = "max_runtime_hours must be 0 (unlimited) or an integer between 1 and 168."
+  }
+}
+
 provider "google" {
   project = var.project_id
   region  = var.region
@@ -180,6 +191,20 @@ resource "google_compute_instance" "demo" {
   }
 
   tags = [local.http_tag, local.ssh_tag]
+
+  # Native Compute Engine timeout: no extra scheduler or service account.
+  # STOP preserves the disk; this limits runtime, not the account's bill.
+  dynamic "scheduling" {
+    for_each = var.max_runtime_hours > 0 ? [var.max_runtime_hours] : []
+    content {
+      automatic_restart           = false
+      provisioning_model          = "STANDARD"
+      instance_termination_action = "STOP"
+      max_run_duration {
+        seconds = scheduling.value * 3600
+      }
+    }
+  }
 
   boot_disk {
     auto_delete = true

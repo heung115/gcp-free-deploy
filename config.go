@@ -32,6 +32,7 @@ type DeployConfig struct {
 	AllowedSourceRanges []string `json:"allowed_source_ranges"`
 	MachineType         string   `json:"machine_type,omitempty"`
 	DiskSizeGB          int      `json:"disk_size_gb,omitempty"`
+	MaxRuntimeHours     int      `json:"max_runtime_hours,omitempty"`
 }
 
 // ValidationError identifies the invalid field without echoing its value.
@@ -105,6 +106,9 @@ func (c DeployConfig) Validate() error {
 	}
 	if c.DiskSizeGB < 10 || c.DiskSizeGB > 30 {
 		return &ValidationError{Field: "disk_size_gb", Message: "must be between 10 and 30 GB"}
+	}
+	if c.MaxRuntimeHours < 0 || c.MaxRuntimeHours > 168 {
+		return &ValidationError{Field: "max_runtime_hours", Message: "must be 0 (unlimited) or between 1 and 168 hours"}
 	}
 
 	switch c.Source {

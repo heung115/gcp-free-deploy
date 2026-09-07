@@ -27,11 +27,12 @@ var computeFreeTierRegions = map[string]bool{
 }
 
 type upOptions struct {
-	ConfigPath      string
-	AutoApprove     bool
-	PlanOnly        bool
-	AllowPublicHTTP bool
-	StartupTimeout  time.Duration
+	ConfigPath         string
+	AutoApprove        bool
+	PlanOnly           bool
+	AllowPublicHTTP    bool
+	AllowPaidResources bool
+	StartupTimeout     time.Duration
 }
 
 type downOptions struct {
@@ -84,6 +85,18 @@ func runCLI(ctx context.Context, args []string, in io.Reader, out, errOut io.Wri
 		return withWorkdirLock(workdir, func() error {
 			return destroyTerraform(ctx, in, out, runner, workdir, opts)
 		})
+	case "audit":
+		err := auditLiveCost(ctx, args[1:], out, errOut, runner)
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	case "cost":
+		err := checkCostProfile(args[1:], out, errOut)
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
 	case "validate":
 		err := validateProject(ctx, args[1:], out, errOut, runner, workdir)
 		if errors.Is(err, flag.ErrHelp) {
@@ -128,6 +141,7 @@ func parseUpOptions(args []string, errOut io.Writer) (upOptions, error) {
 	set.StringVar(&opts.ConfigPath, "config", defaultConfigPath, "deployment config JSON path")
 	set.BoolVar(&opts.AutoApprove, "auto-approve", false, "skip the apply confirmation")
 	set.BoolVar(&opts.PlanOnly, "plan-only", false, "validate and create a plan without applying it")
+	set.BoolVar(&opts.AllowPaidResources, "allow-paid-resources", false, "allow a machine type or region outside the Compute Engine Free Tier profile")
 	set.BoolVar(&opts.AllowPublicHTTP, "allow-public-http", false, "allow source ranges covering the entire IPv4 internet only when explicitly requested")
 	set.DurationVar(&opts.StartupTimeout, "startup-timeout", defaultStartupTimeout, "startup verification deadline; final checks and diagnostics can take up to 90s longer")
 	set.Usage = func() {
@@ -182,6 +196,11 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 			Diagnostics: "the configured source ranges cover the entire IPv4 internet; specify --allow-public-http to continue",
 		}
 	}
+	if !opts.PlanOnly && !opts.AllowPaidResources {
+		if err := guardCostProfile(cfg); err != nil {
+			return err
+		}
+	}
 	if err := ensureRuntimeAssets(workdir); err != nil {
 		return err
 	}
@@ -211,6 +230,11 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 	if err := guardUpState(ctx, runner, workdir, cfg); err != nil {
 		return err
 	}
+	if !opts.PlanOnly && !opts.AllowPaidResources {
+		if err := guardProjectVMOverlap(ctx, runner, cfg); err != nil {
+			return err
+		}
+	}
 
 	zones := append([]string{cfg.Zone}, cfg.FallbackZones...)
 	for index, zone := range zones {
@@ -238,6 +262,11 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 			outputs, err := readTerraformOutputs(ctx, runner, workdir)
 			if err != nil {
 				return err
+			}
+			if !opts.AllowPaidResources {
+				if err := verifyLiveNetworkTier(ctx, runner, outputs); err != nil {
+					return fmt.Errorf("%w\nThe VM and network remain. Inspect them with audit, then fix the tier or clean them up with down", err)
+				}
 			}
 			fmt.Fprintln(out, "Verifying the existing deployment without applying an empty plan.")
 			monitor := NewDeploymentMonitor(runner, out)
@@ -272,6 +301,11 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 		outputs, err := readTerraformOutputs(ctx, runner, workdir)
 		if err != nil {
 			return err
+		}
+		if !opts.AllowPaidResources {
+			if err := verifyLiveNetworkTier(ctx, runner, outputs); err != nil {
+				return fmt.Errorf("%w\nThe VM and network remain. Inspect them with audit, then fix the tier or clean them up with down", err)
+			}
 		}
 		fmt.Fprintln(out, "\nInfrastructure created. Verifying startup, container, and HTTP status.")
 		monitor := NewDeploymentMonitor(runner, out)
@@ -490,6 +524,11 @@ func printDeploymentSummary(out io.Writer, cfg DeployConfig, opts upOptions) {
 		fmt.Fprintf(out, "- fallback zones: %s\n", strings.Join(cfg.FallbackZones, ", "))
 	}
 	fmt.Fprintf(out, "- VM: %s, boot disk: %dGB pd-standard\n", cfg.MachineType, cfg.DiskSizeGB)
+	if cfg.MaxRuntimeHours > 0 {
+		fmt.Fprintf(out, "- automatic stop: after %d hours per start; disk is retained and each new start resets the runtime limit\n", cfg.MaxRuntimeHours)
+	} else {
+		fmt.Fprintln(out, "- automatic stop: disabled; set max_runtime_hours (1-168) to limit unattended runtime")
+	}
 	fmt.Fprintf(out, "- source: %s, host TCP/80 -> container TCP/%d\n", cfg.Source, cfg.ContainerPort)
 	fmt.Fprintf(out, "- HTTP source ranges: %s\n", strings.Join(cfg.AllowedSourceRanges, ", "))
 	fmt.Fprintf(out, "- startup timeout: %s (verification deadline; final checks and diagnostics may add up to %s)\n", opts.StartupTimeout, 2*diagnosticTimeout)
@@ -502,6 +541,9 @@ func printDeploymentSummary(out io.Writer, cfg DeployConfig, opts upOptions) {
 		fmt.Fprintln(out, "- WARNING: Docker latest tag is mutable; use a fixed tag or digest when possible")
 	}
 	printFreeTierAssessment(out, cfg)
+	if opts.AllowPaidResources {
+		fmt.Fprintln(out, "- cost profile guard: overridden with --allow-paid-resources")
+	}
 	if opts.PlanOnly {
 		fmt.Fprintln(out, "- mode: plan only (no resource mutation)")
 	} else {
@@ -682,6 +724,8 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "Commands:")
 	fmt.Fprintln(out, "  init      Prepare the embedded Terraform and example config files")
 	fmt.Fprintln(out, "  validate  Check the config and Terraform files without querying GCP")
+	fmt.Fprintln(out, "  audit     Inspect actual GCP VM, disk, and network cost configuration")
+	fmt.Fprintln(out, "  cost      Check the config's cost profile offline without external tools")
 	fmt.Fprintln(out, "  up        Plan, create, and verify the deployment")
 	fmt.Fprintln(out, "  down      Delete resources tracked by this working directory's state")
 	fmt.Fprintln(out, "  version   Print version information")

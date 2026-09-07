@@ -16,13 +16,15 @@ It is intended for disposable demos and learning environments, not production.
 > [!WARNING]
 > **Free Tier-compatible does not mean a guaranteed $0 bill.** The default VM,
 > region, and disk profile target the Google Cloud Free Tier, but this tool also
-> assigns an external IPv4 address. Google's current Billing Pricing API shows a
-> monthly zero-price address-hour tier before the **$0.005/hour** paid tier. It
-> often covers most or all of one continuously used address, but the allowance
-> is pooled across the billing account. Excess address-hours, outbound data,
-> taxes, or other resources can still produce a bill. Read
-> [Cost and Free Tier limits](docs/costs.md) before applying a plan. Pricing last
-> checked: **2026-09-03**.
+> assigns an external IPv4 address. Pricing APIs checked on **2026-09-07** report
+> **720 address-hours/month/account free, then $0.005/hour**. The VPC pricing
+> page still differs. For one address with no other shared usage, the observed
+> tiers imply $0 for 30 days or $0.12 for 31 days before credits and taxes;
+> a price response is not an actual bill. Standard Tier outbound traffic has a
+> separate **200 GiB/month** allowance. Other resources and shared usage can
+> still produce a bill.
+> Read [Cost and Free Tier limits](docs/costs.md). IPv4 and transfer sources
+> checked: **2026-09-07**.
 
 ## Why use it?
 
@@ -35,6 +37,10 @@ It is intended for disposable demos and learning environments, not production.
 - Verify the startup script, running container, and internal and external HTTP
   health before reporting success.
 - Review saved Terraform plans before both creation and deletion.
+- Check the configured cost profile offline and block deployments outside the
+  supported Free Tier VM and region profile unless explicitly allowed.
+- Audit an existing VM’s actual network tier and project disk allocation with `gcloud`.
+- Optionally stop a forgotten demo after a configured runtime; examples use 24 hours.
 - Refuse to operate on unknown, legacy, mixed, or ambiguous Terraform state.
 - Clean up partially created resources even when VM creation fails.
 
@@ -142,7 +148,8 @@ Edit `gcp-free-deploy.json`:
   "container_port": 80,
   "allowed_source_ranges": ["203.0.113.10/32"],
   "machine_type": "e2-micro",
-  "disk_size_gb": 10
+  "disk_size_gb": 10,
+  "max_runtime_hours": 24
 }
 ```
 
@@ -157,6 +164,7 @@ Validate locally, review the cloud plan, and deploy:
 
 ```bash
 gcp-free-deploy validate
+gcp-free-deploy cost
 gcp-free-deploy up --plan-only
 gcp-free-deploy up
 ```
@@ -184,7 +192,8 @@ example; replace the placeholder values before using it:
   "container_port": 8080,
   "allowed_source_ranges": ["203.0.113.10/32"],
   "machine_type": "e2-micro",
-  "disk_size_gb": 10
+  "disk_size_gb": 10,
+  "max_runtime_hours": 24
 }
 ```
 
@@ -202,6 +211,8 @@ URL, destroy and recreate the deployment.
 | --- | --- |
 | `gcp-free-deploy init` | Write missing embedded Terraform and example files without overwriting existing files |
 | `gcp-free-deploy validate` | Validate config and Terraform locally without querying or changing GCP resources |
+| `gcp-free-deploy cost` | Read config and report its cost profile offline; no tools, authentication, or file creation |
+| `gcp-free-deploy audit --project PROJECT --vm VM --zone ZONE` | Read actual VM, network tier, project disks, and VM count; no state file required |
 | `gcp-free-deploy up --plan-only` | Query GCP and create a Terraform plan without applying it |
 | `gcp-free-deploy up` | Review, create, and verify the deployment |
 | `gcp-free-deploy down` | Review and destroy resources tracked by the local state |
@@ -211,6 +222,7 @@ Useful options:
 
 ```bash
 gcp-free-deploy up --config other.json
+gcp-free-deploy cost --config other.json
 gcp-free-deploy up --startup-timeout 20m
 gcp-free-deploy up --auto-approve
 gcp-free-deploy down --auto-approve
@@ -221,8 +233,8 @@ HTTP checks succeed. Its default 15-minute limit can be set from 1 minute to 1
 hour. At the timeout boundary, the CLI makes one final status and health check;
 startup failures may also collect bounded startup, container, and HTTP
 diagnostics. Those final steps can take up to 90 additional seconds. The
-resources remain running after a timeout until you diagnose them or run
-`gcp-free-deploy down`.
+resources remain after a timeout. The optional runtime limit can stop the VM,
+but `gcp-free-deploy down` is still needed to remove managed resources.
 
 To expose plain HTTP to the entire IPv4 internet, use `0.0.0.0/0` in the config
 and acknowledge the risk separately. The same acknowledgement is required if
@@ -234,6 +246,52 @@ gcp-free-deploy up --allow-public-http
 
 ## Free Tier resource profile
 
+`gcp-free-deploy cost [--config PATH]` reads only the configuration; it needs no
+Terraform, `gcloud`, or authentication and creates no files. It returns an error
+if the machine is not `e2-micro` or the region is outside `us-west1`,
+`us-central1`, and `us-east1`. Config validation already limits the disk to
+10–30 GB. This report does not inspect cloud state, billing, account eligibility,
+or actual usage, and does not guarantee a zero bill.
+
+`up` rejects an out-of-profile configuration before preparing runtime assets,
+checking external tools, or accessing GCP. To intentionally deploy such a
+configuration, use `gcp-free-deploy up --allow-paid-resources`. `--auto-approve`
+does not bypass this check. `up --plan-only` remains available without the
+override, and `down` can still clean up existing out-of-profile deployments
+subject to the existing state and asset checks.
+
+Before creating an apply plan, `up` also checks for other VMs in the project and
+blocks overlapping deployments by default, including legacy deployments. This
+requires `compute.instances.list`; unreadable or incomplete inventory is not
+treated as an empty project. Plan-only mode and `--allow-paid-resources` bypass
+this guard. Other projects sharing the billing account still require review.
+
+Check an existing VM independently of its original deployment tool or local state:
+
+```bash
+gcp-free-deploy audit --project YOUR_PROJECT_ID --vm YOUR_VM_NAME --zone us-central1-a
+```
+
+`audit` requires authenticated `gcloud` and Compute Engine read permissions. It
+returns an error for Premium or unverified network tier, missing required data,
+or disk/VM settings outside the checked profile. Multiple project VMs produce a
+caution; their accumulated account-wide usage is unknown. It does not change
+resources or inspect invoices. `up` also verifies actual Standard access before
+health checks and reporting success, unless `--allow-paid-resources` is set.
+A failed verification leaves resources in place for inspection or cleanup.
+
+The examples set `max_runtime_hours` to `24`: Compute Engine stops the VM after
+24 hours from each start. Omit it or use `0` for no runtime limit; integers
+`1`–`168` are accepted. Restarting starts a new interval. **Stopping retains the
+disk** and is not a spending cap; use `down` when the demo is finished.
+
+Older templates used an empty `access_config {}`, which defaults to Premium.
+Changing a local template does not update an existing VM. Retain its original
+CLI, `main.tf`, and working directory until cleanup; managed assets are not
+automatically overwritten, and this release changes the runtime template.
+Use the original binary for `down` if the new CLI reports an asset mismatch.
+Do not apply the new template to legacy state just to change its network tier.
+
 The example intentionally uses the current Compute Engine Free Tier VM and disk
 shape:
 
@@ -243,11 +301,11 @@ shape:
 | Region | `us-west1`, `us-central1`, or `us-east1` | Other regions are outside the Compute Engine Free Tier |
 | Boot disk | 10 GB `pd-standard` | Up to 30 GB-month across the billing account |
 | OS | Ubuntu 24.04 LTS | The selected standard image has no premium OS license charge |
-| External IPv4 | Ephemeral, Standard Tier | A monthly account-wide zero-price address-hour tier applies before excess usage is billed |
-| Outbound traffic | Application-dependent | Quotas and destination exclusions apply |
+| External IPv4 | Ephemeral, Standard Tier | Pricing API: 720 address-hours/month/account free, then $0.005/hour; VPC page still differs |
+| Outbound traffic | Standard Tier | First 200 GiB/month/account free under current pricing; shared across regions |
 
-The CLI cannot see your billing-account-wide usage, discounts, taxes, existing
-VMs, or future pricing changes. It therefore cannot certify a deployment as
+The live audit can inspect VMs in the selected project, but cannot measure
+billing-account-wide usage, discounts, taxes, or future pricing changes. It therefore cannot certify a deployment as
 free. Review [the full cost checklist](docs/costs.md) and the live Google Cloud
 pricing pages before every long-running deployment.
 
@@ -282,7 +340,7 @@ use it for sensitive data or a production service.
 - No automatic migration of legacy state
 - No private registries or GitHub repositories
 - Fixed resource names; use only one active deployment per GCP project
-- No automatic expiry, stop, or cleanup; resources remain until `down` succeeds
+- No automatic deletion; the optional runtime stop retains disks until cleanup
 - Container builds can exceed the memory or disk available on an `e2-micro`
 - The ephemeral external IP can change after VM replacement or some lifecycle operations
 
@@ -303,6 +361,7 @@ or destroy that legacy state.
 ## Documentation and support
 
 - [Cost and Free Tier limits](docs/costs.md)
+- [Free-first operations (한국어)](docs/free-first-operations.ko.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture and operations decisions](docs/architecture-and-operations.md)
 - [Contributing](CONTRIBUTING.md)

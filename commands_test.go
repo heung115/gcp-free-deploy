@@ -189,8 +189,10 @@ func TestDeployDoesNotApplyAnEmptyPlan(t *testing.T) {
 		{},
 		{},
 		{Stdout: "default\n"},
+		{Stdout: `[]`},
 		{ExitCode: 0, Stdout: "No changes."},
 		{Stdout: testTerraformOutputsJSON()},
+		{Stdout: `{"name":"gcp-free-deploy-demo","zone":"zones/us-central1-a","networkInterfaces":[{"accessConfigs":[{"networkTier":"STANDARD"}]}]}`},
 		{Stdout: "STARTUP_DONE\nCONTAINER_RUNNING\nHTTP_HEALTH_OK"},
 		{},
 	}}

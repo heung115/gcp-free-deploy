@@ -42,6 +42,7 @@ type terraformVariables struct {
 	AllowedSourceRanges []string `json:"allowed_source_ranges"`
 	MachineType         string   `json:"machine_type"`
 	DiskSizeGB          int      `json:"disk_size_gb"`
+	MaxRuntimeHours     int      `json:"max_runtime_hours"`
 }
 
 func writeTerraformVariables(dir string, cfg DeployConfig) (string, error) {
@@ -56,6 +57,7 @@ func writeTerraformVariables(dir string, cfg DeployConfig) (string, error) {
 		AllowedSourceRanges: append([]string(nil), cfg.AllowedSourceRanges...),
 		MachineType:         cfg.MachineType,
 		DiskSizeGB:          cfg.DiskSizeGB,
+		MaxRuntimeHours:     cfg.MaxRuntimeHours,
 	}
 	data, err := json.MarshalIndent(values, "", "  ")
 	if err != nil {

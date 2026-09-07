@@ -1,6 +1,7 @@
 # Cost and Google Cloud Free Tier limits
 
-Last verified against the linked Google Cloud documentation: **2026-09-03**.
+IPv4 and network-transfer sources rechecked: **2026-09-07**. This date does not
+mean that every linked product price was reverified.
 
 This project is Free Tier-aware, not a guarantee of a zero-dollar bill. Google
 Cloud pricing, your billing-account-wide usage, taxes, credits, and discounts are
@@ -29,63 +30,134 @@ Sources:
 - [E2 machine specifications](https://cloud.google.com/compute/docs/general-purpose-machines)
 - [Disk and image pricing](https://cloud.google.com/compute/disks-image-pricing)
 
-## External IPv4 pricing is tiered
+## External IPv4: pricing API reports 720 free address-hours
 
-This tool assigns one ephemeral external IPv4 address so that the deployed HTTP
-service can be opened in a browser and checked from outside the VM. Google's VPC
-price table lists **$0.005 per address-hour** for an in-use static or ephemeral
-IPv4 address on a standard VM. That paid rate is not applied to every hour from
-zero, however.
+This tool assigns one ephemeral external IPv4 address for public HTTP access.
+On **2026-09-07**, the public pricing API for `External IP Charge on a Standard VM`
+(`C054-7F72-A02E`) returned **720 address-hours per account per month at $0**, then
+**$0.005 per address-hour**. An account-specific pricing response returned the
+same list and contract prices with `default-price`. Units were hours, quantity
+one, with account-level monthly aggregation. See the [observation record](evidence/ipv4-sku-2026-09-07.md).
 
-The Billing Pricing API for the `External IP Charge on a Standard VM` SKU
-(`C054-7F72-A02E`) exposes a monthly, billing-account-wide zero-price tier before
-the paid tier. The threshold can appear as 720 or 744 address-hours depending on
-the month and billing context. It often covers most or all of one continuously
-attached address. If a 31-day month uses a 720-hour threshold, for example, only
-the final 24 hours enter the paid tier. Therefore, multiplying a full month
-directly by `$0.005` and presenting `$3.60–$3.72` as the expected charge is
-incorrect.
+For one continuously used address, if the same tier applies throughout the
+period and no other usage consumes the shared allowance, 30 days (720 hours)
+costs **$0** and 31 days (744 hours) costs **$0.12**, before credits and taxes.
+The observed threshold is **720 hours**, not a variable 720/744-hour allowance.
 
-The allowance is shared by the billing account. Two overlapping addresses, an
-additional VM, or other consumption of the same SKU can exhaust it sooner; hours
-above the account's current threshold use the paid tier. Currency, contract
-pricing, credits, and delayed usage attribution can also change the amount shown
-on an invoice. Delete the VM when finished so its ephemeral address is released.
-Merely stopping a VM can leave other billable resources such as its disk in
-place.
+The VPC pricing page still lists **one free hour per month per account**, whereas
+the SKU catalog displays **0 month to 1 month**. The API resolves the numeric
+threshold of the observed prices as 720 hours; the VPC page discrepancy remains.
+An account-specific price response is not an actual bill or a record of consumed
+allowance. Confirm billed usage and credits in Cloud Billing. The current Free
+Program page does not state a separate `e2-micro` external IPv4 exemption.
+
+Shared account usage, contract pricing, currency, credits, and delayed usage
+attribution can change the invoice. Deleting the VM releases its ephemeral IP;
+stopping the VM can leave billable storage. Standard Network Tier does not
+change the IPv4 unit price or provide a separate IP allowance.
 
 Sources:
 
+- [Public pricing API: C054-7F72-A02E](https://cloudbilling.googleapis.com/v1beta/skus/C054-7F72-A02E/price?currencyCode=USD)
 - [VPC external IP address pricing](https://cloud.google.com/vpc/network-pricing#ipaddress)
-- [Get Google Cloud pricing information with the Pricing API](https://cloud.google.com/billing/docs/how-to/get-pricing-information-api)
-- [Pricing API tier model](https://cloud.google.com/billing/docs/reference/pricing-api/rest/v1beta/skus.price/get)
+- [Public SKU catalog: C054-7F72-A02E](https://cloud.google.com/skus?currency=USD&filter=C054-7F72-A02E)
+- [Google Cloud Free Program](https://docs.cloud.google.com/free/docs/free-cloud-features)
+
+## Traffic: Standard Tier has a separate allowance
+
+The Terraform template sets `network_tier = "STANDARD"`. Internet traffic entering
+the VM is free under the network transfer pricing; data the VM sends to internet
+clients is outbound traffic. Serving pages, API responses, and downloads consumes
+outbound bytes. Downloading an image into the VM mainly consumes inbound bytes;
+requests and protocol traffic sent by the VM still travel outbound.
+
+For this project's US source regions, Standard Tier pricing lists **the first
+200 GiB per month per account free**, then **$0.085/GiB** for the portion above
+200 GiB through **10,240 GiB total monthly usage**. The VPC pricing page says the
+free allowance is combined across all regions, so do not budget 200 GiB for each
+VM, project, or region. For example, 250 GiB of qualifying monthly outbound usage
+costs `(250 - 200) × $0.085 = $4.25`, before other charges and credits, assuming
+no other usage consumes the shared allowance.
+
+The Network Service Tiers pricing page explicitly says the Compute Engine
+Always Free transfer allowance does not apply to Standard Tier. **Do not add
+its 1 GB to the 200 GiB allowance.** Premium Tier has different rates and rules;
+the actual VM must use Standard to claim its allowance. A template edit alone
+does not change existing resources. GiB means 2^30 bytes.
+
+There is also a documentation discrepancy: the Network Service Tiers overview
+says 200 GB per region/per SKU, while the VPC pricing page says 200 GiB across
+regions. Use the latter, more conservative pooling assumption for planning and
+verify account-level usage before expanding across regions.
+
+Sources:
+
+- [Network Service Tiers pricing](https://cloud.google.com/network-tiers/pricing)
+- [VPC network pricing](https://cloud.google.com/vpc/network-pricing)
+- [Network Service Tiers overview](https://docs.cloud.google.com/network-tiers/docs/overview)
 
 ## How this repository maps to the profile
 
+Run `gcp-free-deploy cost` (or `gcp-free-deploy cost --config other.json`) for an
+offline, read-only configuration report. It requires no Terraform, `gcloud`, or
+authentication, creates no files, and returns an error for a machine other than
+`e2-micro` or a region outside `us-west1`, `us-central1`, and `us-east1`. The
+existing config validation limits disks to 10–30 GB. The report does not inspect
+Terraform state, live resources, bills, account eligibility, or usage; passing
+the check does not guarantee a zero bill.
+
+`up` blocks an out-of-profile configuration before runtime asset preparation,
+external tool checks, or cloud access. Intentional deployments outside this
+profile require `--allow-paid-resources`; `--auto-approve` does not bypass the
+guard. `up --plan-only` is allowed without the override so you can review the
+plan. The guard does not affect `down` for existing out-of-profile deployments;
+the usual state and managed-asset safety checks still apply.
+
+For existing resources, use authenticated `gcloud` through:
+
+```bash
+gcp-free-deploy audit --project YOUR_PROJECT_ID --vm YOUR_VM_NAME --zone us-central1-a
+```
+
+All three target flags are required. No Terraform state is needed, and no cloud
+resources are changed. The audit reads the actual VM/network tier, project disks,
+and VM count. Premium, missing required information, or resources outside the
+checked profile cause an error. Multiple VMs produce a caution because account
+VM-hour consumption is not known. It checks present allocation, not historical
+usage, invoices, other projects, or other services.
+
+`up` verifies actual Standard networking before health checks and success unless
+`--allow-paid-resources` is specified. Verification failure leaves the resources
+in place; inspect them with `audit` and resolve or clean up the deployment.
+
+A legacy empty `access_config {}` defaults to Premium. Updating repository code
+does not migrate an existing VM. Keep each deployment’s original CLI, `main.tf`,
+and working directory for cleanup: this release changes the runtime template,
+and existing managed files are not overwritten automatically. If an asset
+mismatch blocks `down`, use the original binary. Do not apply a new template to
+legacy state merely to change the network tier. See the
+[free-first operations guide (한국어)](free-first-operations.ko.md).
+
 | Setting or resource | Project behavior | Cost implication |
 | --- | --- | --- |
-| `machine_type` | Defaults to `e2-micro`; other x86-64 machine types may be used | Other machine types are outside the Compute Engine Free Tier; Arm-only families are incompatible with the selected image |
-| `zone` | Example uses `us-central1-a`; any valid zone is allowed | Only the three documented US regions are eligible |
+| `machine_type` | Defaults to `e2-micro`; deploying other supported x86-64 types requires `--allow-paid-resources` | Other machine types are outside the Compute Engine Free Tier; Arm-only families are incompatible with the selected image |
+| `zone` | Example uses `us-central1-a`; deploying outside the three profile regions requires `--allow-paid-resources` | Only the three documented US regions are eligible |
 | Boot disk | Fixed to `pd-standard`; config allows 10–30 GB | Other disks in the billing account count toward the same allowance |
+| `max_runtime_hours` | Optional `0` (unlimited) or `1`–`168`; examples recommend `24` | Stops the VM after each start interval; disk remains, and restarting resets the interval |
 | VM image | Standard Ubuntu 24.04 LTS | Premium OS images are not used |
-| External IP | One ephemeral IPv4 using Standard Network Tier | Uses the account-wide monthly address-hour tier; excess usage is billed |
+| External IP | One ephemeral IPv4 using Standard Network Tier | Pricing API observed 720 address-hours/month/account free, then $0.005/hour; VPC page still differs |
 | Snapshots | None created | Snapshots would have separate storage and possible network charges |
 | DNS and TLS | Not created | Cloud DNS and managed frontend services would be separate resources |
 
-Standard Network Tier has its own current transfer pricing. Do not treat a
-network pricing tier as an extension of the Compute Engine Free Tier guarantee;
-check both the Free Program page and the live
-[VPC network pricing](https://cloud.google.com/vpc/network-pricing) page.
-
-A small non-zero bill can come from IPv4 hours just beyond the zero-price tier,
-outbound traffic just beyond an applicable transfer allowance, overlapping
-resources, a partially billed month, taxes, or rounding. In Billing Reports,
+A non-zero bill can come from IPv4, outbound traffic beyond the applicable shared
+allowance, overlapping resources, taxes, or rounding. In Billing Reports,
 group by SKU and inspect `External IP Charge on a Standard VM`, persistent-disk,
 instance-core/RAM, and network data transfer rows instead of inferring the cause
 from the total alone.
 
 ## Before `up`
 
+- Run `gcp-free-deploy cost` to check the configuration's VM, region, and disk profile.
 - Confirm that the project is linked to the intended active billing account.
 - Check existing `e2-micro`, disk, external IP, and outbound-transfer usage across
   that billing account.
@@ -95,10 +167,11 @@ from the total alone.
 - Keep total eligible `pd-standard` usage at or below the current account-wide
   allowance.
 - Review the Terraform plan instead of using `--auto-approve` on a first run.
-- Check whether other external IPv4 addresses already consume the shared monthly
-  address-hour tier.
-- Set your own reminder or operational expiry: the CLI does not stop or delete
-  a deployment automatically.
+- Verify the external IPv4 SKU allowance actually applied to your account and
+  include other addresses sharing it.
+- Set `max_runtime_hours` to a short interval such as `24` for disposable demos.
+  Automatic stop retains the disk and does not cap traffic or the account bill.
+  Omission or `0` disables the runtime limit; restarting begins a new interval.
 - Create a billing budget or alert if useful, while remembering that a standard
   budget is an alert and **does not automatically cap Compute Engine spending**.
 

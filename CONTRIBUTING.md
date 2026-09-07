@@ -29,6 +29,7 @@ go vet ./...
 terraform fmt -check -diff main.tf
 terraform init -reconfigure -lockfile=readonly -input=false
 terraform validate
+terraform test
 ```
 
 Tests should not require a real Google Cloud project. External commands are

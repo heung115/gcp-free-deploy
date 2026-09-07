@@ -12,5 +12,6 @@
     "203.0.113.10/32"
   ],
   "machine_type": "e2-micro",
-  "disk_size_gb": 10
+  "disk_size_gb": 10,
+  "max_runtime_hours": 24
 }

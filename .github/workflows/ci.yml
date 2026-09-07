@@ -79,3 +79,6 @@ jobs:
 
       - name: Validate
         run: terraform validate -no-color
+
+      - name: Test cost controls without cloud resources
+        run: terraform test -no-color
