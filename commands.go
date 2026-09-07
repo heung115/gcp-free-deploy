@@ -29,6 +29,7 @@ var computeFreeTierRegions = map[string]bool{
 type upOptions struct {
 	ConfigPath         string
 	AutoApprove        bool
+	SkipBudgetAlerts   bool
 	PlanOnly           bool
 	AllowPublicHTTP    bool
 	AllowPaidResources bool
@@ -146,6 +147,7 @@ func parseUpOptions(args []string, errOut io.Writer) (upOptions, error) {
 	set.SetOutput(errOut)
 	set.StringVar(&opts.ConfigPath, "config", defaultConfigPath, "deployment config JSON path")
 	set.BoolVar(&opts.AutoApprove, "auto-approve", false, "skip the apply confirmation")
+	set.BoolVar(&opts.SkipBudgetAlerts, "skip-budget-alerts", false, "explicitly deploy without automatically configuring billing email alerts")
 	set.BoolVar(&opts.PlanOnly, "plan-only", false, "validate and create a plan without applying it")
 	set.BoolVar(&opts.AllowPaidResources, "allow-paid-resources", false, "allow a machine type or region outside the Compute Engine Free Tier profile")
 	set.BoolVar(&opts.AllowPublicHTTP, "allow-public-http", false, "allow source ranges covering the entire IPv4 internet only when explicitly requested")
@@ -242,6 +244,17 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 		}
 	}
 
+	budgetReady := false
+	ensureBudget := func() error {
+		if budgetReady || opts.SkipBudgetAlerts {
+			return nil
+		}
+		if err := configureDeploymentBudget(ctx, out, runner, cfg.ProjectID); err != nil {
+			return fmt.Errorf("automatic cost alerts could not be configured: %w; Terraform apply was not started for this attempt. Existing resources and any created alert settings remain. Fix the alert permissions/settings, or explicitly use --skip-budget-alerts", err)
+		}
+		budgetReady = true
+		return nil
+	}
 	zones := append([]string{cfg.Zone}, cfg.FallbackZones...)
 	for index, zone := range zones {
 		attempt := cfg
@@ -274,6 +287,9 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 					return fmt.Errorf("%w\nThe VM and network remain. Inspect them with audit, then fix the tier or clean them up with down", err)
 				}
 			}
+			if err := ensureBudget(); err != nil {
+				return err
+			}
 			fmt.Fprintln(out, "Verifying the existing deployment without applying an empty plan.")
 			monitor := NewDeploymentMonitor(runner, out)
 			monitor.startupTimeout = opts.StartupTimeout
@@ -294,6 +310,9 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 				fmt.Fprintln(out, "Deployment cancelled; no resources were changed.")
 				return nil
 			}
+		}
+		if err := ensureBudget(); err != nil {
+			return err
 		}
 		if err := runTerraformApply(ctx, runner, workdir, applyPlanName, approved); err != nil {
 			var deployErr *DeploymentError
@@ -540,6 +559,13 @@ func printDeploymentSummary(out io.Writer, cfg DeployConfig, opts upOptions) {
 	fmt.Fprintf(out, "- startup timeout: %s (verification deadline; final checks and diagnostics may add up to %s)\n", opts.StartupTimeout, 2*diagnosticTimeout)
 	fmt.Fprintln(out, "- resources: dedicated VPC, subnet, HTTP firewall, IAP SSH firewall, one VM with ephemeral external IP")
 	fmt.Fprintln(out, "- VM service account: none; HTTPS: not configured")
+	if opts.PlanOnly {
+		fmt.Fprintln(out, "- billing email alerts: not changed in plan-only mode")
+	} else if opts.SkipBudgetAlerts {
+		fmt.Fprintln(out, "- WARNING: automatic billing email alerts explicitly skipped")
+	} else {
+		fmt.Fprintln(out, "- billing email alerts: automatically discover billing account, enable required APIs, and create/reuse a budget and email channel for the signed-in user")
+	}
 	if cfg.exposesHTTPToEveryone() {
 		fmt.Fprintln(out, "- WARNING: TCP/80 will be reachable from the entire IPv4 internet")
 	}

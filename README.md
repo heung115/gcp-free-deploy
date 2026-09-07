@@ -205,6 +205,13 @@ build output must support that platform. GitHub mode clones once during VM
 creation; it is not continuous deployment. To build newer commits from the same
 URL, destroy and recreate the deployment.
 
+`up` automatically discovers the billing account and signed-in email, enables the
+required APIs, and creates or reuses free budget email alerts. If setup fails,
+it stops before Terraform apply. Plan-only runs and cancelled deployments leave
+alerts unchanged. Use `--skip-budget-alerts` only when alerts are managed elsewhere;
+`budget` remains available for manual administration.
+
+
 ## Commands
 
 | Command | Effect |

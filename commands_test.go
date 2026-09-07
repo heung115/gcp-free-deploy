@@ -199,9 +199,10 @@ func TestDeployDoesNotApplyAnEmptyPlan(t *testing.T) {
 	var out bytes.Buffer
 
 	err := deployTerraform(context.Background(), &bytes.Buffer{}, &out, runner, dir, upOptions{
-		ConfigPath:     configPath,
-		AutoApprove:    true,
-		StartupTimeout: defaultStartupTimeout,
+		ConfigPath:       configPath,
+		SkipBudgetAlerts: true,
+		AutoApprove:      true,
+		StartupTimeout:   defaultStartupTimeout,
 	})
 	if err != nil {
 		t.Fatalf("deployTerraform() returned an error: %v", err)

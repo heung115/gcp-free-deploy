@@ -206,6 +206,15 @@ links above—not this repository—as the source of truth for current pricing.
 
 ## Free email cost alerts
 
+Normal `up` runs set up alerts automatically after deployment approval and before
+Terraform apply (also when verifying an unchanged deployment). The app discovers
+the linked billing account and signed-in email and prepares the required APIs,
+email channel and budget. Setup failures stop the deployment; existing resources
+and any alert settings already created remain. Plan-only/cancelled runs don't
+change alerts. `--skip-budget-alerts` explicitly opts out for separately managed
+environments. `down` retains alerts for delayed charges. The command below is for
+manual budget administration.
+
 Run `gcp-free-deploy budget --project PROJECT --billing-account ACCOUNT --enable-api`
 to create a project-scoped monthly budget, inclusive of all credits. The default
 amount is **1 unit of the billing account currency**, with actual-spend thresholds

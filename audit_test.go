@@ -152,7 +152,7 @@ func TestDeployVerifiesActualTierBeforeSuccess(t *testing.T) {
 			results = append(results, CommandResult{Stdout: "STARTUP_DONE\nCONTAINER_RUNNING\nHTTP_HEALTH_OK"}, CommandResult{})
 			runner := &recordingRunner{results: results}
 			var out bytes.Buffer
-			err := deployTerraform(context.Background(), &bytes.Buffer{}, &out, runner, dir, upOptions{ConfigPath: configPath, AutoApprove: true, AllowPaidResources: override, StartupTimeout: defaultStartupTimeout})
+			err := deployTerraform(context.Background(), &bytes.Buffer{}, &out, runner, dir, upOptions{ConfigPath: configPath, AutoApprove: true, AllowPaidResources: override, SkipBudgetAlerts: true, StartupTimeout: defaultStartupTimeout})
 			if (err == nil) != override {
 				t.Fatalf("changed=%v override=%v err=%v output=%s", changed, override, err, out.String())
 			}
