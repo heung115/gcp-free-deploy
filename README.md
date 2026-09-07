@@ -211,6 +211,7 @@ URL, destroy and recreate the deployment.
 | --- | --- |
 | `gcp-free-deploy init` | Write missing embedded Terraform and example files without overwriting existing files |
 | `gcp-free-deploy validate` | Validate config and Terraform locally without querying or changing GCP resources |
+| `gcp-free-deploy budget --project PROJECT --billing-account ACCOUNT` | Create/reuse a free email billing budget; default 1 billing currency unit/month |
 | `gcp-free-deploy cost` | Read config and report its cost profile offline; no tools, authentication, or file creation |
 | `gcp-free-deploy audit --project PROJECT --vm VM --zone ZONE` | Read actual VM, network tier, project disks, and VM count; no state file required |
 | `gcp-free-deploy up --plan-only` | Query GCP and create a Terraform plan without applying it |

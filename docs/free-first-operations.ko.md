@@ -72,3 +72,46 @@ Premium의 무료 전송량을 여기에 더하지 않습니다. 다른 프로�
 
 결제 보고서는 SKU별 사용 비용과 크레딧을 함께 확인하세요. 표준 예산 알림은 지출을
 자동으로 막지 않으며, 청구 반영 지연 때문에 삭제 직후의 0원도 최종 청구액은 아닙니다.
+
+
+## 무료 이메일 비용 알림
+
+Cloud Billing 예산과 기본 이메일 알림은 무료입니다. 배포 전에 다음 명령을 실행하세요.
+청구 계정 통화의 **1 단위**를 월 예산으로 잡고 실제 비용이 1%·10%·100%에 도달하면
+알립니다. USD 계정은 $0.01·$0.10·$1, KRW 계정은 0.01원·0.1원·1원 기준입니다.
+금액의 통화를 확인하고 필요하면 `--amount 100`처럼 조정하세요. KRW 계정에서
+`--amount 100`을 쓰면 1원·10원·100원 알림이 됩니다.
+
+```bash
+# 조회만 수행하고 생성할 설정을 확인
+gcp-free-deploy budget --project YOUR_PROJECT_ID --billing-account YOUR_BILLING_ACCOUNT --dry-run
+# 필요한 무료 Budget API 활성화와 예산 생성
+gcp-free-deploy budget --project YOUR_PROJECT_ID --billing-account YOUR_BILLING_ACCOUNT --enable-api
+```
+
+`gcloud` 로그인, 프로젝트 조회·청구 연결 조회·예산 조회/생성 권한이 필요합니다.
+`--enable-api`에는 프로젝트 API 활성화 권한도 필요합니다. 예산은 해당 프로젝트의
+모든 서비스 비용을 월별로 합산하고 무료 할인과 크레딧을 적용합니다. 시험 크레딧으로
+상쇄되는 비용은 알림 기준에 도달하지 않을 수 있습니다. 다른 프로젝트 비용은 제외됩니다.
+
+기본 수신자는 **청구 계정 관리자·사용자 역할 보유자**입니다. 프로젝트 소유자나 현재
+로그인 사용자라는 이유만으로 이메일 수신이 보장되지는 않습니다. 특정 이메일로
+받으려면 Cloud Monitoring의 이메일 알림 채널을 만들고 다음 옵션을 함께 사용하세요.
+
+```bash
+gcp-free-deploy budget --project YOUR_PROJECT_ID --billing-account YOUR_BILLING_ACCOUNT \
+  --notification-channel projects/YOUR_PROJECT_ID/notificationChannels/CHANNEL_ID
+```
+
+동일한 관리 이름과 설정의 예산은 재사용하며, 기존 예산 설정이 다르면 덮어쓰지 않고
+중단합니다. 개인이 만든 다른 예산은 보존합니다. 알림을 받으려고 Pub/Sub, Functions,
+BigQuery 또는 Monitoring 메트릭 알림 정책을 추가할 필요는 없습니다.
+
+알림 설정 저장과 이메일 실제 수신은 별개입니다. 첫 알림까지 수 시간이 걸릴 수 있고
+사용 비용 반영도 지연됩니다. 비용을 일부러 발생시켜 테스트하지 마세요. 예산은
+Compute Engine 지출을 자동 차단하지 않습니다. 현재 미리보기 Spend cap 역시
+Compute Engine VM·디스크의 고정 사용 비용을 멈추는 기능이 아닙니다.
+
+근거: [Cloud Billing 가격](https://cloud.google.com/billing/v1/pricing),
+[예산·알림 및 반영 지연](https://docs.cloud.google.com/billing/docs/how-to/budgets),
+[Spend cap 지원 범위](https://docs.cloud.google.com/billing/docs/how-to/budgets-spend-caps).

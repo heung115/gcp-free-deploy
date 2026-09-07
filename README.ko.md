@@ -161,6 +161,7 @@ Docker tag도 registry에서 같은 이름으로 바뀔 수 있습니다. 같은
 | --- | --- |
 | `gcp-free-deploy init` | 기존 파일은 덮어쓰지 않고 누락된 Terraform·예제 파일 준비 |
 | `gcp-free-deploy validate` | GCP 조회·변경 없이 설정과 Terraform 정적 검증 |
+| `gcp-free-deploy budget --project PROJECT --billing-account ACCOUNT` | 무료 이메일 비용 알림 생성·재사용, 기본 월 1 청구 통화 단위 |
 | `gcp-free-deploy cost` | 외부 도구·인증·파일 생성 없이 설정의 비용 구성을 오프라인 점검 |
 | `gcp-free-deploy audit --project PROJECT --vm VM --zone ZONE` | 실제 VM·네트워크 등급·프로젝트 디스크·VM 수 조회, state 불필요 |
 | `gcp-free-deploy up --plan-only` | GCP를 조회해 plan만 만들고 적용하지 않음 |

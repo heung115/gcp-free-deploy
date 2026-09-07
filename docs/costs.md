@@ -202,3 +202,23 @@ The CLI validates the requested resource shape, but it cannot reliably determine
 
 Google states that Free Tier terms can change with advance notice. Treat the
 links above—not this repository—as the source of truth for current pricing.
+
+
+## Free email cost alerts
+
+Run `gcp-free-deploy budget --project PROJECT --billing-account ACCOUNT --enable-api`
+to create a project-scoped monthly budget, inclusive of all credits. The default
+amount is **1 unit of the billing account currency**, with actual-spend thresholds
+at 1%, 10%, and 100%. Use `--amount` to change the amount and `--dry-run` to inspect
+without changes. The managed budget is reused only when its settings match;
+existing differing budgets are never overwritten. API activation is opt-in.
+
+Default email recipients are billing account administrators/users, not necessarily
+the signed-in user or project owner. Use `--notification-channel
+projects/PROJECT/notificationChannels/ID` with an existing Monitoring email channel
+for a specific recipient. Budget APIs and email budget alerts are
+[free](https://cloud.google.com/billing/v1/pricing); this command creates no metric
+alert policy, Pub/Sub, Function, or BigQuery export. Credits may offset charges
+and prevent alerts. Notifications and cost reporting can be delayed; these alerts
+are not a spending cap or proof of zero charges. See the
+[Korean setup guide](free-first-operations.ko.md#무료-이메일-비용-알림).

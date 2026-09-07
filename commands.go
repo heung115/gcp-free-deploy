@@ -85,6 +85,12 @@ func runCLI(ctx context.Context, args []string, in io.Reader, out, errOut io.Wri
 		return withWorkdirLock(workdir, func() error {
 			return destroyTerraform(ctx, in, out, runner, workdir, opts)
 		})
+	case "budget":
+		err := configureBudget(ctx, args[1:], out, errOut, runner)
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
 	case "audit":
 		err := auditLiveCost(ctx, args[1:], out, errOut, runner)
 		if errors.Is(err, flag.ErrHelp) {
@@ -724,6 +730,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "Commands:")
 	fmt.Fprintln(out, "  init      Prepare the embedded Terraform and example config files")
 	fmt.Fprintln(out, "  validate  Check the config and Terraform files without querying GCP")
+	fmt.Fprintln(out, "  budget    Create or verify monthly billing email alerts")
 	fmt.Fprintln(out, "  audit     Inspect actual GCP VM, disk, and network cost configuration")
 	fmt.Fprintln(out, "  cost      Check the config's cost profile offline without external tools")
 	fmt.Fprintln(out, "  up        Plan, create, and verify the deployment")
