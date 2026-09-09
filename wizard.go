@@ -127,34 +127,46 @@ func wizardFlow(ctx context.Context, reader *bufio.Reader, out, errOut io.Writer
 		ProjectID string `json:"projectId"`
 		Name      string `json:"name"`
 	}
-	if result.ExitCode != 0 || json.Unmarshal([]byte(result.Stdout), &projects) != nil {
+	if result.ExitCode != 0 || strings.TrimSpace(result.Stdout) == "null" || json.Unmarshal([]byte(result.Stdout), &projects) != nil {
 		return fmt.Errorf("could not list projects; check your Google account and project permissions")
 	}
+	project := ""
+	accountScanned := false
 	if len(projects) == 0 {
-		return fmt.Errorf("create a Google Cloud project and connect a billing account first: https://console.cloud.google.com/projectcreate")
-	}
-	for i, p := range projects {
-		if !projectIDPattern.MatchString(p.ProjectID) {
-			return fmt.Errorf("project list contained an invalid project ID")
+		project, err = proposeProjectCreation(ctx, runner, out, ask, func(account string) error {
+			return reviewAccountFreeUsage(ctx, runner, out, account, ask)
+		})
+		if err != nil {
+			return err
 		}
-		fmt.Fprintf(out, "%d. %s\n", i+1, p.ProjectID)
-	}
-	index := 1
-	if len(projects) > 1 {
-		selection, e := ask("Project number [1]: ")
-		if e != nil {
-			return e
+		if project == "" {
+			return nil
 		}
-		if selection != "" {
-			index, e = strconv.Atoi(selection)
-			if e != nil || index < 1 || index > len(projects) {
-				return fmt.Errorf("select a project number from the list")
-			}
-		}
+		accountScanned = true
 	} else {
-		fmt.Fprintf(out, "Using the only available project: %s\n", projects[0].ProjectID)
+		for i, p := range projects {
+			if !projectIDPattern.MatchString(p.ProjectID) {
+				return fmt.Errorf("project list contained an invalid project ID")
+			}
+			fmt.Fprintf(out, "%d. %s\n", i+1, p.ProjectID)
+		}
+		index := 1
+		if len(projects) > 1 {
+			selection, e := ask("Project number [1]: ")
+			if e != nil {
+				return e
+			}
+			if selection != "" {
+				index, e = strconv.Atoi(selection)
+				if e != nil || index < 1 || index > len(projects) {
+					return fmt.Errorf("select a project number from the list")
+				}
+			}
+		} else {
+			fmt.Fprintf(out, "Using the only available project: %s\n", projects[0].ProjectID)
+		}
+		project = projects[index-1].ProjectID
 	}
-	project := projects[index-1].ProjectID
 	billing := run("billing", "projects", "describe", project, "--format=json(billingAccountName,billingEnabled)")
 	var link struct {
 		BillingAccountName string `json:"billingAccountName"`
@@ -162,6 +174,11 @@ func wizardFlow(ctx context.Context, reader *bufio.Reader, out, errOut io.Writer
 	}
 	if billing.ExitCode != 0 || json.Unmarshal([]byte(billing.Stdout), &link) != nil || !link.BillingEnabled || !strings.HasPrefix(link.BillingAccountName, "billingAccounts/") || len(link.BillingAccountName) <= len("billingAccounts/") {
 		return fmt.Errorf("project billing could not be verified; connect a billing account or check permissions at https://console.cloud.google.com/billing/linkedaccount?project=%s; no changes made", project)
+	}
+	if !accountScanned {
+		if err := reviewAccountFreeUsage(ctx, runner, out, strings.TrimPrefix(link.BillingAccountName, "billingAccounts/"), ask, project); err != nil {
+			return err
+		}
 	}
 	cfg := DeployConfig{ProjectID: project, Zone: "us-central1-a", MachineType: "e2-micro", DiskSizeGB: 10, ContainerPort: 80, MaxRuntimeHours: 24}
 	if strings.HasPrefix(strings.ToLower(source), "https://") {

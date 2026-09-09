@@ -15,6 +15,8 @@ func wizardRunner() *recordingRunner {
 		{Stdout: "owner@example.com"}, {Stdout: "SECRET_ADC_TOKEN"},
 		{Stdout: `[{"projectId":"demo-project-123"}]`},
 		{Stdout: `{"billingEnabled":true,"billingAccountName":"billingAccounts/ABCDEF-123456-ABCDEF"}`},
+		{Stdout: `[{"projectId":"demo-project-123","billingAccountName":"billingAccounts/ABCDEF-123456-ABCDEF","billingEnabled":true}]`},
+		{Stdout: `[]`}, {Stdout: `[]`}, {Stdout: `[]`},
 		{Stdout: "8.8.8.8"},
 	}}
 }
@@ -43,7 +45,7 @@ func TestWizardCancelDoesNotWriteOrEnableAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries, _ := os.ReadDir(dir)
-	if len(entries) != 0 || len(r.commands) != 5 {
+	if len(entries) != 0 || len(r.commands) != 9 {
 		t.Fatalf("cancel mutated: files=%v commands=%v", entries, r.commands)
 	}
 	if strings.Contains(out.String(), "SECRET_ADC_TOKEN") {
@@ -153,7 +155,7 @@ func TestWizardManualIPFallbackAndContinuousGitHubMode(t *testing.T) {
 	t.Setenv("GCP_FREE_DEPLOY_HOME", t.TempDir())
 	dir := t.TempDir()
 	r := wizardRunner()
-	r.results[4] = CommandResult{ExitCode: 1}
+	r.results[8] = CommandResult{ExitCode: 1}
 	r.results = append(r.results, CommandResult{Stdout: "compute.googleapis.com"}, CommandResult{ExitCode: 1})
 	var out bytes.Buffer
 	err := runWizard(context.Background(), strings.NewReader("https://github.com/example/demo.git\n8.8.4.4\nport\n8080\nruntime\n2\n\n"), &out, &out, r, dir)
@@ -202,6 +204,7 @@ func TestWizardMultipleProjectsStillRequiresSelection(t *testing.T) {
 	t.Setenv("GCP_FREE_DEPLOY_HOME", t.TempDir())
 	r := wizardRunner()
 	r.results[2].Stdout = `[{"projectId":"first-project"},{"projectId":"second-project"}]`
+	r.results[4].Stdout = strings.ReplaceAll(r.results[4].Stdout, "demo-project-123", "second-project")
 	r.missing = map[string]bool{"curl": true}
 	var out bytes.Buffer
 	if err := runWizard(context.Background(), strings.NewReader("nginx:1.30.4\n2\ncancel\n"), &out, &out, r, t.TempDir()); err != nil {

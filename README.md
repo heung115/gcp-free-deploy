@@ -138,8 +138,20 @@ Deployment paths are saved in the user configuration directory, allowing selecti
 and management/deletion from any working directory. Delete retains its target/plan
 confirmation. The catalog stores paths only; keep the original state directories.
 Missing/invalid entries are skipped. `GCP_FREE_DEPLOY_HOME` overrides the catalog
-directory for portable installations. Project creation, billing enrollment,
-permissions, Terraform and Google Cloud CLI installation remain prerequisites.
+directory for portable installations. When no accessible projects exist, setup
+offers to create one, selects an open billing account, and asks for explicit
+approval of the generated project ID and billing link. Billing enrollment/payment
+registration, permissions and tool installation remain prerequisites. A project
+whose billing link fails is preserved with recovery instructions.
+
+Before a new guided deployment (and before new-project creation), setup inventories
+current VMs including stopped instances, disks and reserved external IPs across
+projects linked to the selected billing account. Existing resources and unknown
+inventory (permissions/disabled APIs/incomplete responses) stop the flow by default;
+only explicit `allow-cost-risk` continues. The scan changes no resources or APIs.
+Free-tier-shaped VMs are candidates, not proof of free billing. Past deleted
+resources, monthly usage/transfer, other services and actual invoices are outside
+the scan; an empty inventory is not a free-quota balance.
 The manual configuration workflow follows below.
 
 ## Quick start
