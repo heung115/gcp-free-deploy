@@ -230,9 +230,6 @@ func deployTerraform(ctx context.Context, in io.Reader, out io.Writer, runner Ru
 		if err := requireTool(runner, "gcloud"); err != nil {
 			return err
 		}
-		if err := requireTool(runner, "curl"); err != nil {
-			return err
-		}
 	}
 	planPath := filepath.Join(workdir, applyPlanName)
 	if err := preparePlanDestination(planPath); err != nil {

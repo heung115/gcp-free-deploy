@@ -338,3 +338,11 @@ func TestAtomicWriteReplacesExistingFileCompletely(t *testing.T) {
 		t.Fatalf("temporary files remain after successful atomic write: %v", temporaryFiles)
 	}
 }
+
+func (r *recordingRunner) HTTPGet(ctx context.Context, url string) (string, error) {
+	result := r.Run(ctx, Command{Name: "http-get", Args: []string{url}})
+	if result.ExitCode != 0 {
+		return "", errors.New("HTTP failed")
+	}
+	return result.Stdout, nil
+}

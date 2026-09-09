@@ -70,7 +70,6 @@ Go CLI ───── Terraform ───── Google Cloud
 - Go 1.26.8 or newer when installing from source
 - Terraform 1.9 or newer and earlier than 2.0
 - [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
-- `curl` available on the operator's machine for the external health check
 - A Google Cloud project with an active billing account
 - Compute Engine API enabled
 - Application Default Credentials and an authenticated `gcloud` session
@@ -121,19 +120,27 @@ Supported targets are Linux amd64/arm64, macOS amd64/arm64, and Windows amd64.
 
 ## Guided start
 
-Run `gcp-free-deploy` with no arguments, or `gcp-free-deploy start`, for the guided
-flow. It checks required tools, offers browser login when credentials are missing,
-lists projects, and asks for an image/public GitHub URL, port, runtime and allowed
-IPv4. Public IPv4 discovery uses `api.ipify.org`; review the result or enter it
-manually. Test mode stops after 24 hours; continuous mode has no runtime limit.
+Run `gcp-free-deploy` with no arguments, or `gcp-free-deploy start`. With no saved
+deployments it asks directly for an image/public GitHub URL. A single available
+project is selected automatically. Browser login is offered only if needed.
 
-After confirmation it creates a separate deployment directory under the current
-folder, writes the configuration, prepares the Compute Engine API, and enters the
-normal guarded `up` flow including automatic budget emails. Review the Terraform
-plan before the final apply confirmation. Project creation, billing enrollment,
-permissions and dependency installation remain prerequisites. Existing deployment
-verification/deletion operates on the current deployment directory; keep the
-printed folder path. The manual configuration workflow follows below.
+The settings screen defaults to port 80, a 24-hour stop, and HTTP access from your
+public IPv4 only. Press Enter to continue, or choose `port`, `runtime`, or `ip` to
+edit just that setting. IPv4 discovery uses `api.ipify.org` with manual fallback.
+Local HTTP uses Go directly, so no local curl installation is required.
+
+The default path is **app source → settings Enter → final Terraform plan approval**.
+Continuing prepares an isolated folder/config and enables the Compute API if
+needed. There is no separate preparation yes prompt; server creation still needs
+final plan approval. The normal cost guards and automatic budget emails remain.
+
+Deployment paths are saved in the user configuration directory, allowing selection
+and management/deletion from any working directory. Delete retains its target/plan
+confirmation. The catalog stores paths only; keep the original state directories.
+Missing/invalid entries are skipped. `GCP_FREE_DEPLOY_HOME` overrides the catalog
+directory for portable installations. Project creation, billing enrollment,
+permissions, Terraform and Google Cloud CLI installation remain prerequisites.
+The manual configuration workflow follows below.
 
 ## Quick start
 

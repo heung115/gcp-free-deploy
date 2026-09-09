@@ -161,7 +161,7 @@ func TestDeployVerifiesActualTierBeforeSuccess(t *testing.T) {
 					t.Fatalf("missing cleanup hint: %v", err)
 				}
 				for _, cmd := range runner.commands {
-					if cmd.Name == "curl" || (cmd.Name == "gcloud" && len(cmd.Args) > 1 && cmd.Args[1] == "ssh") {
+					if cmd.Name == "http-get" || (cmd.Name == "gcloud" && len(cmd.Args) > 1 && cmd.Args[1] == "ssh") {
 						t.Fatalf("monitor ran before tier verification: %v", cmd)
 					}
 				}

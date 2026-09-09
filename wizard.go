@@ -37,30 +37,53 @@ func runWizard(ctx context.Context, in io.Reader, out, errOut io.Writer, runner 
 }
 
 func wizardFlow(ctx context.Context, reader *bufio.Reader, out, errOut io.Writer, runner Runner, workdir string, ask func(string) (string, error)) error {
-	fmt.Fprintln(out, "gcp-free-deploy guided setup\n1. Deploy a new app\n2. Check or update the deployment in this folder\n3. Delete the deployment in this folder")
-	choice, err := ask("Choose [1]: ")
+	workdir, err := filepath.Abs(workdir)
 	if err != nil {
 		return err
 	}
-	workdir, err = filepath.Abs(workdir)
+	known, err := discoverDeployments(workdir)
+	if err != nil {
+		return fmt.Errorf("read saved deployments: %w", err)
+	}
+	fmt.Fprintln(out, "gcp-free-deploy guided setup")
+	if len(known) > 0 {
+		fmt.Fprintln(out, "0. Deploy a new app")
+		for i, d := range known {
+			fmt.Fprintf(out, "%d. %s — %s (%s)\n", i+1, d.ProjectID, d.Source, d.Dir)
+		}
+		choice, err := ask("Choose a deployment, or 0 for new [0]: ")
+		if err != nil {
+			return err
+		}
+		if choice != "" && choice != "0" {
+			n, e := strconv.Atoi(choice)
+			if e != nil || n < 1 || n > len(known) {
+				return fmt.Errorf("select a deployment from the list")
+			}
+			dir := known[n-1].Dir
+			action, e := ask("1. Check or update   2. Delete [1]: ")
+			if e != nil {
+				return e
+			}
+			return withWorkdirLock(dir, func() error {
+				switch action {
+				case "", "1":
+					return deployTerraform(ctx, reader, out, runner, dir, upOptions{ConfigPath: filepath.Join(dir, "gcp-free-deploy.json"), StartupTimeout: defaultStartupTimeout})
+				case "2":
+					return destroyTerraform(ctx, reader, out, runner, dir, downOptions{})
+				default:
+					return fmt.Errorf("choose 1 or 2")
+				}
+			})
+		}
+	}
+	source, err := ask("Docker image with a fixed tag, or public GitHub repository URL: ")
 	if err != nil {
 		return err
-	}
-	switch choice {
-	case "2":
-		return withWorkdirLock(workdir, func() error {
-			return deployTerraform(ctx, reader, out, runner, workdir, upOptions{ConfigPath: filepath.Join(workdir, "gcp-free-deploy.json"), StartupTimeout: defaultStartupTimeout})
-		})
-	case "3":
-		return withWorkdirLock(workdir, func() error { return destroyTerraform(ctx, reader, out, runner, workdir, downOptions{}) })
-	case "", "1":
-	default:
-		return fmt.Errorf("choose 1, 2, or 3")
 	}
 	for _, tool := range []struct{ name, url string }{
 		{"terraform", "https://developer.hashicorp.com/terraform/install"},
 		{"gcloud", "https://cloud.google.com/sdk/docs/install"},
-		{"curl", "https://curl.se/download.html"},
 	} {
 		if runner.LookPath(tool.name) != nil {
 			return fmt.Errorf("install %s, then run start again: %s", tool.name, tool.url)
@@ -116,16 +139,20 @@ func wizardFlow(ctx context.Context, reader *bufio.Reader, out, errOut io.Writer
 		}
 		fmt.Fprintf(out, "%d. %s\n", i+1, p.ProjectID)
 	}
-	selection, err := ask("Project number [1]: ")
-	if err != nil {
-		return err
-	}
-	if selection == "" {
-		selection = "1"
-	}
-	index, err := strconv.Atoi(selection)
-	if err != nil || index < 1 || index > len(projects) {
-		return fmt.Errorf("select a project number from the list")
+	index := 1
+	if len(projects) > 1 {
+		selection, e := ask("Project number [1]: ")
+		if e != nil {
+			return e
+		}
+		if selection != "" {
+			index, e = strconv.Atoi(selection)
+			if e != nil || index < 1 || index > len(projects) {
+				return fmt.Errorf("select a project number from the list")
+			}
+		}
+	} else {
+		fmt.Fprintf(out, "Using the only available project: %s\n", projects[0].ProjectID)
 	}
 	project := projects[index-1].ProjectID
 	billing := run("billing", "projects", "describe", project, "--format=json(billingAccountName,billingEnabled)")
@@ -137,54 +164,18 @@ func wizardFlow(ctx context.Context, reader *bufio.Reader, out, errOut io.Writer
 		return fmt.Errorf("project billing could not be verified; connect a billing account or check permissions at https://console.cloud.google.com/billing/linkedaccount?project=%s; no changes made", project)
 	}
 	cfg := DeployConfig{ProjectID: project, Zone: "us-central1-a", MachineType: "e2-micro", DiskSizeGB: 10, ContainerPort: 80, MaxRuntimeHours: 24}
-	source, err := ask("Docker image with a fixed tag, or public GitHub repository URL: ")
-	if err != nil {
-		return err
-	}
 	if strings.HasPrefix(strings.ToLower(source), "https://") {
 		cfg.Source, cfg.GithubRepo = "github", source
 		fmt.Fprintln(out, "The public repository must contain a Dockerfile at its root.")
 	} else {
 		cfg.Source, cfg.DockerImage = "docker", source
 	}
-	port, err := ask("Container port [80]: ")
-	if err != nil {
-		return err
-	}
-	if port != "" {
-		cfg.ContainerPort, err = strconv.Atoi(port)
-		if err != nil {
-			return fmt.Errorf("container port must be a number from 1 to 65535")
-		}
-	}
-	runtime, err := ask("Run mode: 1 = stop after 24 hours, 2 = continuous [1]: ")
-	if err != nil {
-		return err
-	}
-	switch runtime {
-	case "", "1":
-	case "2":
-		cfg.MaxRuntimeHours = 0
-	default:
-		return fmt.Errorf("choose run mode 1 or 2")
-	}
 	fmt.Fprintln(out, "Checking this computer's public IPv4 using https://api.ipify.org ...")
 	ipCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	ipResult := runner.Run(ipCtx, Command{Name: "curl", Args: []string{"-4", "--fail", "--silent", "--show-error", "--max-time", "10", "https://api.ipify.org"}, Dir: workdir})
+	detected, ipErr := runnerHTTPGet(ipCtx, runner, "https://api.ipify.org")
 	cancel()
-	detected := strings.TrimSpace(ipResult.Stdout)
-	allowed := ""
-	if ipResult.ExitCode == 0 && wizardPublicIPv4(detected) {
-		answer, err := ask(fmt.Sprintf("Allow HTTP access only from %s? Enter yes, or enter another public IPv4: ", detected))
-		if err != nil {
-			return err
-		}
-		if strings.EqualFold(answer, "yes") {
-			allowed = detected
-		} else {
-			allowed = answer
-		}
-	} else {
+	allowed := strings.TrimSpace(detected)
+	if ipErr != nil || !wizardPublicIPv4(allowed) {
 		fmt.Fprintln(errOut, "Could not detect a public IPv4 automatically.")
 		allowed, err = ask("Public IPv4 allowed to access the app: ")
 		if err != nil {
@@ -195,29 +186,70 @@ func wizardFlow(ctx context.Context, reader *bufio.Reader, out, errOut io.Writer
 		return fmt.Errorf("enter one public IPv4 address; broad ranges and private addresses are not accepted by guided setup")
 	}
 	cfg.AllowedSourceRanges = []string{net.ParseIP(allowed).To4().String() + "/32"}
-	cfg.Normalize()
-	if err := cfg.Validate(); err != nil {
-		return err
+	for {
+		cfg.Normalize()
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		if err := guardCostProfile(cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "\nProject: %s\nApp: %s\nPort: %d\nServer: e2-micro, us-central1-a, 10 GB standard disk, Standard network\nHTTP access: %s only (no HTTPS)\n", project, source, cfg.ContainerPort, cfg.AllowedSourceRanges[0])
+		if cfg.MaxRuntimeHours == 0 {
+			fmt.Fprintln(out, "Run time: continuous.")
+		} else {
+			fmt.Fprintln(out, "Run time: stop after 24 hours; disk remains until deletion.")
+		}
+		fmt.Fprintln(out, "Cost email alerts: automatic. Free allowances are shared; alerts do not cap spending.")
+		fmt.Fprintln(out, "Continue prepares a local folder and enables the Compute API if needed. Server creation still requires approval of the Terraform plan.")
+		answer, e := ask("Enter = continue, port/runtime/ip = change a setting, cancel = exit: ")
+		if e != nil {
+			return e
+		}
+		switch strings.ToLower(answer) {
+		case "":
+			goto prepare
+		case "cancel":
+			fmt.Fprintln(out, "Setup cancelled; no deployment resources created.")
+			return nil
+		case "port":
+			v, e := ask("Container port: ")
+			if e != nil {
+				return e
+			}
+			n, e := strconv.Atoi(v)
+			if e != nil || n < 1 || n > 65535 {
+				fmt.Fprintln(out, "Enter a port from 1 to 65535.")
+				continue
+			}
+			cfg.ContainerPort = n
+		case "runtime":
+			v, e := ask("1 = stop after 24 hours, 2 = continuous: ")
+			if e != nil {
+				return e
+			}
+			if v == "1" {
+				cfg.MaxRuntimeHours = 24
+			} else if v == "2" {
+				cfg.MaxRuntimeHours = 0
+			} else {
+				fmt.Fprintln(out, "Choose 1 or 2.")
+			}
+		case "ip":
+			v, e := ask("Public IPv4 allowed to access the app: ")
+			if e != nil {
+				return e
+			}
+			if !wizardPublicIPv4(v) {
+				fmt.Fprintln(out, "Enter one public IPv4 address.")
+				continue
+			}
+			cfg.AllowedSourceRanges = []string{net.ParseIP(v).To4().String() + "/32"}
+		default:
+			fmt.Fprintln(out, "Press Enter to continue, or choose port, runtime, ip, or cancel.")
+		}
 	}
-	if err := guardCostProfile(cfg); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "\nProject: %s\nServer: e2-micro, us-central1-a, 10 GB standard disk, Standard network\nHTTP access: %s\n", project, cfg.AllowedSourceRanges[0])
-	if cfg.MaxRuntimeHours == 0 {
-		fmt.Fprintln(out, "Run time: continuous.")
-	} else {
-		fmt.Fprintln(out, "Run time: stops after 24 hours; the disk remains until you delete the deployment.")
-	}
-	fmt.Fprintln(out, "Cost email alerts: automatic. Free allowances are shared; alerts are delayed and do not cap spending.")
-	fmt.Fprintln(out, "Continuing creates a deployment folder and enables the Compute API if needed. You will review and approve the Terraform plan separately before server creation.")
-	answer, err := ask("Enter yes to prepare this deployment: ")
-	if err != nil {
-		return err
-	}
-	if !strings.EqualFold(answer, "yes") {
-		fmt.Fprintln(out, "Setup cancelled; no changes made.")
-		return nil
-	}
+prepare:
 	api := run("services", "list", "--enabled", "--project="+project, "--filter=config.name=compute.googleapis.com", "--format=value(config.name)")
 	if api.ExitCode != 0 {
 		return fmt.Errorf("could not check Compute API status; check project permissions")
@@ -237,6 +269,9 @@ func wizardFlow(ctx context.Context, reader *bufio.Reader, out, errOut io.Writer
 	}
 	if err := os.WriteFile(configPath, append(data, '\n'), 0o600); err != nil {
 		return err
+	}
+	if err := rememberDeployment(dir); err != nil {
+		fmt.Fprintf(errOut, "Could not save deployment shortcut: %v. Keep the folder path below.\n", err)
 	}
 	fmt.Fprintf(out, "Deployment folder: %s\nKeep this folder to manage or delete the server. To resume: cd into this folder and run gcp-free-deploy up.\n", dir)
 	if status == "" {

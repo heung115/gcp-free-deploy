@@ -221,8 +221,8 @@ func (m *DeploymentMonitor) collectDiagnosticsWithTimeout(ctx context.Context, o
 
 func (m *DeploymentMonitor) waitForPublicHealth(ctx context.Context, websiteURL string) error {
 	for attempt := 1; attempt <= m.healthChecks; attempt++ {
-		result := m.runner.Run(ctx, Command{Name: "curl", Args: []string{"--fail", "--silent", "--show-error", "--connect-timeout", "3", "--max-time", "10", websiteURL}})
-		if result.ExitCode == 0 {
+		_, err := runnerHTTPGet(ctx, m.runner, websiteURL)
+		if err == nil {
 			return nil
 		}
 		if err := ctx.Err(); err != nil {

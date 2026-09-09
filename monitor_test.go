@@ -28,6 +28,14 @@ func (r *deadlineRecordingRunner) Run(ctx context.Context, command Command) Comm
 	return CommandResult{}
 }
 
+func (r *deadlineRecordingRunner) HTTPGet(ctx context.Context, url string) (string, error) {
+	result := r.Run(ctx, Command{Name: "curl", Args: []string{url}})
+	if result.ExitCode != 0 {
+		return "", errors.New("HTTP request failed")
+	}
+	return result.Stdout, nil
+}
+
 type deadlineBoundaryRunner struct {
 	calls               int
 	finalHealthSucceeds bool
@@ -67,6 +75,14 @@ func (r *deadlineBoundaryRunner) Run(ctx context.Context, command Command) Comma
 	default:
 		return CommandResult{ExitCode: 1, Stderr: "unexpected command"}
 	}
+}
+
+func (r *deadlineBoundaryRunner) HTTPGet(ctx context.Context, url string) (string, error) {
+	result := r.Run(ctx, Command{Name: "curl", Args: []string{url}})
+	if result.ExitCode != 0 {
+		return "", errors.New("HTTP request failed")
+	}
+	return result.Stdout, nil
 }
 
 func testTerraformOutputs() TerraformOutputs {
