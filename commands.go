@@ -42,11 +42,19 @@ type downOptions struct {
 
 func runCLI(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer, runner Runner, workdir string) error {
 	if len(args) == 0 {
-		printUsage(out)
-		return nil
+		return runWizard(ctx, in, out, errOut, runner, workdir)
 	}
 
 	switch args[0] {
+	case "start":
+		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
+			fmt.Fprintln(out, "Usage: gcp-free-deploy [start]\nGuided deployment: select a project, app and access settings; review before applying.")
+			return nil
+		}
+		if len(args) != 1 {
+			return fmt.Errorf("start accepts no additional arguments")
+		}
+		return runWizard(ctx, in, out, errOut, runner, workdir)
 	case "init":
 		if err := parseInitOptions(args[1:], errOut); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
@@ -754,6 +762,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "Usage: gcp-free-deploy <command> [options]")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Commands:")
+	fmt.Fprintln(out, "  start     Guided deployment (also used when no command is provided)")
 	fmt.Fprintln(out, "  init      Prepare the embedded Terraform and example config files")
 	fmt.Fprintln(out, "  validate  Check the config and Terraform files without querying GCP")
 	fmt.Fprintln(out, "  budget    Create or verify monthly billing email alerts")

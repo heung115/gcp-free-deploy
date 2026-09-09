@@ -73,6 +73,29 @@ Windows PowerShell에서는 다음 명령으로 ZIP의 SHA-256 값을 확인한 
 (Get-FileHash .\gcp-free-deploy-v0.2.0-windows-amd64.zip -Algorithm SHA256).Hash
 ```
 
+## 안내형 시작
+
+필요한 도구를 설치한 뒤 프로그램만 실행하세요. `start`를 명시해도 같습니다.
+
+```bash
+gcp-free-deploy
+```
+
+새 배포를 선택하면 로그인 상태를 확인하고, 필요할 때 동의를 받아 브라우저 로그인을
+진행합니다. 프로젝트 목록에서 대상을 고르고 이미지 또는 공개 GitHub 주소, 앱 포트,
+테스트/상시 운영 방식, 접속할 IP를 입력합니다. 공인 IPv4 조회에는 `api.ipify.org`를
+사용하며 조회값을 확인하거나 직접 입력할 수 있습니다.
+
+안내를 승인하면 현재 폴더 아래에 별도 배포 폴더와 설정을 만들고 Compute Engine API를
+준비합니다. 기존 배포 검증과 비용 알림 설정을 포함한 `up` 흐름으로 이어지며, 최종
+Terraform 계획을 보고 승인한 뒤 실제 서버를 만듭니다. 테스트 운영은 24시간 후 중지,
+상시 운영은 시간 제한 없음입니다. 기본 접근은 지정한 IPv4 한 곳만 허용합니다.
+
+GCP 프로젝트 생성·결제 연결·권한 부여 및 도구 설치는 사용자가 준비해야 합니다.
+누락되면 필요한 작업을 안내합니다. 기존 배포 확인·삭제는 출력된 배포 폴더로 이동해서
+프로그램을 실행하거나 기존 `up`·`down` 명령을 사용하세요. 안내형 시작은 기존 파일을
+덮어쓰지 않습니다. 아래는 설정 파일을 직접 관리하는 방법입니다.
+
 ## 빠른 시작
 
 Terraform state가 다른 배포와 섞이지 않도록 배포마다 빈 작업 폴더를 사용하세요.
@@ -165,6 +188,7 @@ Docker tag도 registry에서 같은 이름으로 바뀔 수 있습니다. 같은
 
 | 명령 | 동작 |
 | --- | --- |
+| `gcp-free-deploy` / `start` | 안내에 따라 로그인·프로젝트·앱 설정 후 배포 |
 | `gcp-free-deploy init` | 기존 파일은 덮어쓰지 않고 누락된 Terraform·예제 파일 준비 |
 | `gcp-free-deploy validate` | GCP 조회·변경 없이 설정과 Terraform 정적 검증 |
 | `gcp-free-deploy budget --project PROJECT --billing-account ACCOUNT` | 무료 이메일 비용 알림 생성·재사용, 기본 월 1 청구 통화 단위 |

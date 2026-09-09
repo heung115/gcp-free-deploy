@@ -119,6 +119,22 @@ On Windows PowerShell, print the archive hash and compare it with the matching
 GitHub build-provenance attestations are published for these release files.
 Supported targets are Linux amd64/arm64, macOS amd64/arm64, and Windows amd64.
 
+## Guided start
+
+Run `gcp-free-deploy` with no arguments, or `gcp-free-deploy start`, for the guided
+flow. It checks required tools, offers browser login when credentials are missing,
+lists projects, and asks for an image/public GitHub URL, port, runtime and allowed
+IPv4. Public IPv4 discovery uses `api.ipify.org`; review the result or enter it
+manually. Test mode stops after 24 hours; continuous mode has no runtime limit.
+
+After confirmation it creates a separate deployment directory under the current
+folder, writes the configuration, prepares the Compute Engine API, and enters the
+normal guarded `up` flow including automatic budget emails. Review the Terraform
+plan before the final apply confirmation. Project creation, billing enrollment,
+permissions and dependency installation remain prerequisites. Existing deployment
+verification/deletion operates on the current deployment directory; keep the
+printed folder path. The manual configuration workflow follows below.
+
 ## Quick start
 
 Use a new empty working directory for each deployment so its local Terraform
@@ -216,6 +232,7 @@ alerts unchanged. Use `--skip-budget-alerts` only when alerts are managed elsewh
 
 | Command | Effect |
 | --- | --- |
+| `gcp-free-deploy` / `start` | Guided login, project/app configuration and deployment |
 | `gcp-free-deploy init` | Write missing embedded Terraform and example files without overwriting existing files |
 | `gcp-free-deploy validate` | Validate config and Terraform locally without querying or changing GCP resources |
 | `gcp-free-deploy budget --project PROJECT --billing-account ACCOUNT` | Create/reuse a free email billing budget; default 1 billing currency unit/month |
